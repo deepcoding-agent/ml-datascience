@@ -305,7 +305,7 @@ class ModelEvaluationAgent(BaseAgent):
                         z=cm,
                         x=labels,
                         y=labels,
-                        colorscale="Viridis",
+                        colorscale=[[0, "#FFF0E0"], [1, "#FB8C3C"]],
                         showscale=True,
                     )
                 )

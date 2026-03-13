@@ -207,17 +207,28 @@ def _run_code(code: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame | None, st
         output = output or "(code ran successfully, no output)"
 
         # Detect a result DataFrame produced by the code
+        # A valid result must have rows as records and columns as fields (not transposed)
+        def _is_valid_result_df(candidate: pd.DataFrame) -> bool:
+            if candidate is df:
+                return False
+            if len(candidate) == 0:
+                return False
+            # Reject 2-column DataFrames that look like transposed Series (index + value)
+            if len(candidate.columns) == 2 and len(candidate) == len(df.columns):
+                return False
+            return True
+
         priority = ["result", "df_result", "output_df", "df_out", "df_new", "df_filtered",
                     "filtered_df", "transformed_df", "df_clean", "df_transformed"]
         result_df: pd.DataFrame | None = None
         for name in priority:
             val = local_ns.get(name)
-            if isinstance(val, pd.DataFrame) and len(val) > 0 and val is not df:
+            if isinstance(val, pd.DataFrame) and _is_valid_result_df(val):
                 result_df = val
                 break
         if result_df is None:
             for val in local_ns.values():
-                if isinstance(val, pd.DataFrame) and len(val) > 0 and val is not df:
+                if isinstance(val, pd.DataFrame) and _is_valid_result_df(val):
                     result_df = val
                     break
 
@@ -235,8 +246,10 @@ def _run_code(code: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame | None, st
 # ── Coding agent (no datasets) ────────────────────────────────────────────────
 
 CODING_SYSTEM = """\
-You are an expert coding and data science assistant. Answer clearly and concisely.
+You are an expert coding and data science assistant.
+Give answers that are complete but tight — cover everything that matters, skip what doesn't.
 Prefer Python. Use markdown fenced code blocks for any code snippets.
+End with a short 1–2 sentence summary of the key takeaway.
 """
 
 
@@ -263,19 +276,27 @@ IMPORTANT RULES:
     df.select_dtypes(include='number')
 - Always use print() to output your results in code.
 - Do NOT explain what you would do — just do it.
+- For show/display/view/list row requests: ALWAYS assign the DataFrame slice to a variable named `result` first, then print it. Example: `result = df.head(10); print(result)`. Never do `print(df.head(10))` directly. NEVER use .T, .transpose(), or .iloc[0] — always return a proper rows × columns DataFrame.
 - For visualization requests (plot, chart, graph, histogram, scatter, bar, line, etc.):
     - Use matplotlib.pyplot (already imported as `plt`) to create the chart.
     - Call plt.show() at the end — the system will capture it automatically.
     - Use plt.figure(figsize=(10, 5)) for a good default size.
     - Always label axes and add a title.
+    - Assign a distinct color to EACH individual bar/point/slice so every value is visually distinguishable. Use this palette cycling through as needed: ["#FB8C3C", "#4C9BE8", "#2DC88A", "#AB63FA", "#FECB52", "#FF6692", "#19D3F3", "#D16C00", "#B6E880", "#F06A6A"]. Pass the list to the `color` parameter (e.g. bar colors via a list).
 
 {data_context}
 """
 
 DS_SYSTEM_STEP2 = """\
 You are a data science assistant. A user asked a question, code was executed against the dataset,
-and the output is shown below. Write a clear, direct answer in plain English using only
-the execution output. Be concise — one or two sentences maximum.
+and the output is shown below. Write a focused, well-structured answer in plain English.
+
+Guidelines:
+- Cover all key findings — do not omit important results.
+- Interpret the numbers, don't just repeat them (explain what they mean).
+- Use bullet points for multiple items; use short paragraphs for explanation.
+- Avoid padding, repetition, or over-explaining obvious things.
+- End with a **Summary** section (1–2 sentences) that captures the core answer.
 
 User question: {question}
 Code executed:
@@ -344,29 +365,55 @@ def run_datascience_agent(
     else:
         final_text = step1_reply
 
-    # ── Step 4: if a new DataFrame was produced, include it as a dataset ───
+    # ── Step 4: if a new DataFrame was produced, show inline or save as dataset ───
+
+    # Detect "show/display/view" intent
+    _show_keywords = {"show", "display", "view", "print", "head", "tail", "first", "last",
+                      "list", "preview", "sample", "peek", "look", "see", "give", "what", "rows"}
+    _msg_lower = message.lower()
+    _msg_words = set(_msg_lower.split())
+    _is_show_intent = bool(_msg_words & _show_keywords)
+
+    # Fallback: if show intent but no result_df was captured (e.g. LLM did print(df.head())),
+    # try to parse stdout output back into a proper rows×columns DataFrame
+    if _is_show_intent and not result_dfs and code_outputs:
+        try:
+            import io as _io
+            raw_out = code_outputs[0].strip()
+            parsed = pd.read_csv(_io.StringIO(raw_out), sep=r"\s{2,}", engine="python")
+            # Reject transposed/Series output: valid table has many columns (>= original df cols or >= 3)
+            # A transposed result has only 2 columns (index + value)
+            if len(parsed) > 0 and len(parsed.columns) >= 3:
+                result_dfs.append(parsed)
+        except Exception:
+            pass
+
     if result_dfs:
         result_df = result_dfs[0]  # primary result
-        # Generate a short snake_case name via LLM
-        try:
-            name_reply = llm.invoke([HumanMessage(
-                content=(
-                    f"Generate a short snake_case dataset name (max 5 words, no spaces) "
-                    f"that describes what this data is, based on the user request: \"{message}\". "
-                    f"Reply with ONLY the name, nothing else."
-                )
-            )]).content.strip().replace(" ", "_").lower()
-            # Strip quotes and non-safe characters
-            import re as _re
-            dataset_name = _re.sub(r"[^a-z0-9_]", "", name_reply)[:60] or "result_dataset"
-        except Exception:
-            dataset_name = "result_dataset"
+        rows_data = result_df.to_dict(orient="records")
 
-        rows_preview = result_df.head(500).to_dict(orient="records")
-        artifacts["data_wrangled"] = rows_preview
-        artifacts["dataset_name"] = dataset_name
-        artifacts["dataset_shape"] = {"rows": len(result_df), "cols": len(result_df.columns)}
-        print(f"[DS-Agent] result dataset='{dataset_name}' shape={result_df.shape}", flush=True)
+        if _is_show_intent:
+            artifacts["inline_table"] = rows_data
+            print(f"[DS-Agent] inline table rows={len(result_df)}", flush=True)
+        else:
+            # Generate a short snake_case name via LLM
+            try:
+                name_reply = llm.invoke([HumanMessage(
+                    content=(
+                        f"Generate a short snake_case dataset name (max 5 words, no spaces) "
+                        f"that describes what this data is, based on the user request: \"{message}\". "
+                        f"Reply with ONLY the name, nothing else."
+                    )
+                )]).content.strip().replace(" ", "_").lower()
+                import re as _re
+                dataset_name = _re.sub(r"[^a-z0-9_]", "", name_reply)[:60] or "result_dataset"
+            except Exception:
+                dataset_name = "result_dataset"
+
+            artifacts["data_wrangled"] = rows_data
+            artifacts["dataset_name"] = dataset_name
+            artifacts["dataset_shape"] = {"rows": len(result_df), "cols": len(result_df.columns)}
+            print(f"[DS-Agent] result dataset='{dataset_name}' shape={result_df.shape}", flush=True)
 
     return final_text, artifacts
 
