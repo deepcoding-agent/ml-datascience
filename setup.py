@@ -5,7 +5,11 @@ import os
 def parse_requirements(filename):
     filename = os.path.join(os.path.dirname(__file__), filename)
     with open(filename, "r") as f:
-        return [line.strip() for line in f if line and not line.startswith("#")]
+        return [
+            line.strip()
+            for line in f
+            if line.strip() and not line.startswith("#") and not line.startswith("-e")
+        ]
 
 
 with open("README.md", "r", encoding="utf-8", errors="ignore") as fh:
