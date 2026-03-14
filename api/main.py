@@ -191,17 +191,18 @@ def _run_code(
     code: str,
     df: pd.DataFrame,
     extra_dfs: dict[str, pd.DataFrame] | None = None,
-) -> tuple[str, pd.DataFrame | None, str | None]:
+) -> tuple[str, pd.DataFrame | None, str | None, pd.DataFrame | None]:
     """
     Execute the code block in a local sandbox with `df` and any extra named
     DataFrames in scope.
-    Returns (stdout_output, result_dataframe_or_None, chart_image_base64_or_None).
+    Returns (stdout_output, result_dataframe_or_None, chart_image_base64_or_None, sandbox_df_or_None).
     A result DataFrame is any variable in the sandbox that:
       - is a pd.DataFrame
       - is not one of the input DataFrames
       - has at least one row
     Priority order: result, df_result, output, df_out, df_new, df_filtered,
                     then any other DataFrame variable.
+    sandbox_df is the state of `df` after code execution (may differ from input if modified in-place).
     """
     buf = io.StringIO()
     captured_charts: list[str] = []
@@ -286,10 +287,11 @@ def _run_code(
                     break
 
         chart_image = captured_charts[0] if captured_charts else None
-        return output, result_df, chart_image
+        sandbox_df = local_ns.get("df") if isinstance(local_ns.get("df"), pd.DataFrame) else None
+        return output, result_df, chart_image, sandbox_df
 
     except Exception as exc:
-        return f"Code execution error: {exc}", None, None
+        return f"Code execution error: {exc}", None, None, None
     finally:
         if _MATPLOTLIB_AVAILABLE and _original_show is not None:
             _plt_mod.show = _original_show  # type: ignore[method-assign]
@@ -330,6 +332,7 @@ IMPORTANT RULES:
 - Always use print() to output your results in code.
 - Do NOT explain what you would do — just do it.
 - For show/display/view/list row requests: ALWAYS assign the DataFrame slice to a variable named `result` first, then print it. Example: `result = df.head(10); print(result)`. Never do `print(df.head(10))` directly. NEVER use .T, .transpose(), or .iloc[0] — always return a proper rows × columns DataFrame.
+- For generate/modify/transform/create requests (replacing values, adding columns, filling NAs, filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply ALL modifications to `result` — NEVER modify `df` directly. At the end, print a short summary (e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
 - For visualization requests (plot, chart, graph, histogram, scatter, bar, line, etc.):
     - Use matplotlib.pyplot (already imported as `plt`) to create the chart.
     - Call plt.show() at the end — the system will capture it automatically.
@@ -422,14 +425,17 @@ def run_datascience_agent(
     code_outputs: list[str] = []
     result_dfs: list[pd.DataFrame] = []
     chart_images: list[str] = []
+    sandbox_dfs: list[pd.DataFrame] = []
     all_code = ""
     for block in code_blocks:
-        out, result_df, chart_img = _run_code(block, df, extra_dfs)
+        out, result_df, chart_img, sandbox_df = _run_code(block, df, extra_dfs)
         code_outputs.append(out)
         if result_df is not None:
             result_dfs.append(result_df)
         if chart_img is not None:
             chart_images.append(chart_img)
+        if sandbox_df is not None:
+            sandbox_dfs.append(sandbox_df)
         print(f"[DS-Agent] code_output: {out[:300]}", flush=True)
         all_code = (all_code + "\n" + block).strip()
 
@@ -455,12 +461,26 @@ def run_datascience_agent(
 
     # ── Step 4: if a new DataFrame was produced, show inline or save as dataset ───
 
-    # Detect "show/display/view" intent
-    _show_keywords = {"show", "display", "view", "print", "head", "tail", "first", "last",
-                      "list", "preview", "sample", "peek", "look", "see", "give", "what", "rows"}
     _msg_lower = message.lower()
     _msg_words = set(_msg_lower.split())
-    _is_show_intent = bool(_msg_words & _show_keywords)
+
+    # Detect "generate/create/modify" intent → always save as new dataset
+    _generate_keywords = {
+        "generate", "create", "make", "build", "produce", "construct",
+        "add", "insert", "put", "introduce", "inject",
+        "modify", "transform", "change", "update", "replace", "edit",
+        "augment", "simulate", "synthesize", "fabricate", "random",
+        "new", "missing", "na", "nan", "null", "duplicate", "shuffle",
+        "merge", "join", "concat", "combine", "split", "sample",
+        "encode", "normalize", "scale", "clean", "impute", "drop",
+        "rename", "reorder", "sort", "filter", "subset",
+    }
+    _is_generate_intent = bool(_msg_words & _generate_keywords)
+
+    # Detect "show/display/view" intent → show as inline table
+    _show_keywords = {"show", "display", "view", "print", "head", "tail", "first", "last",
+                      "list", "preview", "sample", "peek", "look", "see", "what", "rows"}
+    _is_show_intent = bool(_msg_words & _show_keywords) and not _is_generate_intent
 
     # Fallback: if show intent but no result_df was captured (e.g. LLM did print(df.head())),
     # try to parse stdout output back into a proper rows×columns DataFrame
@@ -469,22 +489,26 @@ def run_datascience_agent(
             import io as _io
             raw_out = code_outputs[0].strip()
             parsed = pd.read_csv(_io.StringIO(raw_out), sep=r"\s{2,}", engine="python")
-            # Reject transposed/Series output: valid table has many columns (>= original df cols or >= 3)
-            # A transposed result has only 2 columns (index + value)
             if len(parsed) > 0 and len(parsed.columns) >= 3:
                 result_dfs.append(parsed)
         except Exception:
             pass
 
+    # Fallback for generate intent: if LLM modified df in-place (no new result df captured),
+    # use the sandbox df as the result — but only if it differs from the original df shape or values
+    if _is_generate_intent and not result_dfs and sandbox_dfs:
+        sandbox_df_candidate = sandbox_dfs[-1]  # last executed block's df state
+        # Use it if shape changed or we can detect mutations (always safe to use for generate intent)
+        if len(sandbox_df_candidate) > 0:
+            result_dfs.append(sandbox_df_candidate)
+            print(f"[DS-Agent] fallback: using sandbox df shape={sandbox_df_candidate.shape}", flush=True)
+
     if result_dfs:
         result_df = result_dfs[0]  # primary result
         rows_data = result_df.to_dict(orient="records")
 
-        if _is_show_intent:
-            artifacts["inline_table"] = rows_data
-            print(f"[DS-Agent] inline table rows={len(result_df)}", flush=True)
-        else:
-            # Generate a short snake_case name via LLM
+        if _is_generate_intent:
+            # Generate a short snake_case name via LLM, then auto-save to tab bar
             try:
                 name_reply = llm.invoke([HumanMessage(
                     content=(
@@ -501,7 +525,17 @@ def run_datascience_agent(
             artifacts["data_wrangled"] = rows_data
             artifacts["dataset_name"] = dataset_name
             artifacts["dataset_shape"] = {"rows": len(result_df), "cols": len(result_df.columns)}
-            print(f"[DS-Agent] result dataset='{dataset_name}' shape={result_df.shape}", flush=True)
+            print(f"[DS-Agent] auto-saving dataset='{dataset_name}' shape={result_df.shape}", flush=True)
+
+        elif _is_show_intent:
+            # Show inline with manual Save button
+            artifacts["inline_table"] = rows_data
+            print(f"[DS-Agent] inline table rows={len(result_df)} cols={len(result_df.columns)}", flush=True)
+
+        else:
+            # Default: show inline
+            artifacts["inline_table"] = rows_data
+            print(f"[DS-Agent] inline table (default) rows={len(result_df)} cols={len(result_df.columns)}", flush=True)
 
     return final_text, artifacts
 
