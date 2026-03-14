@@ -79,6 +79,49 @@ class ChatResponse(BaseModel):
     artifacts: dict = {}
 
 
+class SuggestTargetRequest(BaseModel):
+    columns: list[str]
+    sample_data: list[dict] = []
+
+
+class SuggestTargetResponse(BaseModel):
+    target_column: str
+    reason: str
+
+
+class PrepareRequest(BaseModel):
+    dataset: DatasetPayload
+    target_column: str | None = None
+    test_size: float = 0.2
+    scale: bool = True
+    correlation_threshold: float = 0.95
+    mode: str = "full"   # "full" | "clean"
+
+
+class PrepareResponse(BaseModel):
+    success: bool
+    mode: str = "full"
+    report: str
+    steps: list[str] = []
+    target_column: str = ""
+    target_type: str = ""
+    feature_names: list[str] = []
+    train_rows: int = 0
+    test_rows: int = 0
+    n_features: int = 0
+    dropped_columns: list[str] = []
+    corr_dropped: list[str] = []
+    encoded_columns: list[str] = []
+    scaled_columns: list[str] = []
+    label_mappings: dict = {}
+    target_label_map: dict | None = None
+    X_train: list[dict] = []
+    X_test: list[dict] = []
+    y_train: list = []
+    y_test: list = []
+    error: str = ""
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_llm(temperature: float = 0.0) -> ChatOpenAI:
@@ -144,19 +187,25 @@ def _extract_code_blocks(text: str) -> list[str]:
     return re.findall(r"```python\n(.*?)```", text, re.DOTALL)
 
 
-def _run_code(code: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame | None, str | None]:
+def _run_code(
+    code: str,
+    df: pd.DataFrame,
+    extra_dfs: dict[str, pd.DataFrame] | None = None,
+) -> tuple[str, pd.DataFrame | None, str | None]:
     """
-    Execute the code block in a local sandbox with `df` in scope.
+    Execute the code block in a local sandbox with `df` and any extra named
+    DataFrames in scope.
     Returns (stdout_output, result_dataframe_or_None, chart_image_base64_or_None).
     A result DataFrame is any variable in the sandbox that:
       - is a pd.DataFrame
-      - is not the original `df`
+      - is not one of the input DataFrames
       - has at least one row
     Priority order: result, df_result, output, df_out, df_new, df_filtered,
                     then any other DataFrame variable.
     """
     buf = io.StringIO()
     captured_charts: list[str] = []
+    input_dfs = {id(df)} | {id(v) for v in (extra_dfs or {}).values()}
 
     # Patch plt.show to capture figures instead of displaying them
     if _MATPLOTLIB_AVAILABLE:
@@ -175,6 +224,10 @@ def _run_code(code: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame | None, st
     else:
         _original_show = None
         local_ns = {"df": df, "pd": pd}
+
+    # Inject all extra datasets by their sanitized name
+    if extra_dfs:
+        local_ns.update(extra_dfs)
 
     try:
         with redirect_stdout(buf):
@@ -209,7 +262,7 @@ def _run_code(code: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame | None, st
         # Detect a result DataFrame produced by the code
         # A valid result must have rows as records and columns as fields (not transposed)
         def _is_valid_result_df(candidate: pd.DataFrame) -> bool:
-            if candidate is df:
+            if id(candidate) in input_dfs:
                 return False
             if len(candidate) == 0:
                 return False
@@ -308,19 +361,54 @@ Execution output:
 """
 
 
+def _sanitize_var_name(name: str) -> str:
+    """Convert a dataset name to a valid Python identifier."""
+    import re as _re
+    s = _re.sub(r"[^a-zA-Z0-9_]", "_", name.strip())
+    if s and s[0].isdigit():
+        s = "df_" + s
+    return s or "df"
+
+
 def run_datascience_agent(
     message: str,
     datasets: list[DatasetPayload],
     history: list[ChatMessage],
 ) -> tuple[str, dict]:
     primary = datasets[0]
-    print(f"[DS-Agent] dataset='{primary.name}' rows={len(primary.data)}", flush=True)
+    print(f"[DS-Agent] datasets={[d.name for d in datasets]}", flush=True)
 
+    # ── Load all datasets into DataFrames ────────────────────────────────────
     df = pd.DataFrame(primary.data)
-    print(f"[DS-Agent] df.shape={df.shape} columns={list(df.columns)}", flush=True)
+    print(f"[DS-Agent] primary='{primary.name}' shape={df.shape}", flush=True)
 
-    context = _data_context(df, primary.name)
-    system_prompt = DS_SYSTEM_STEP1.format(data_context=context)
+    # Build named namespace for all extra datasets
+    extra_dfs: dict[str, pd.DataFrame] = {}
+    for ds in datasets[1:]:
+        var_name = _sanitize_var_name(ds.name)
+        extra_dfs[var_name] = pd.DataFrame(ds.data)
+        print(f"[DS-Agent] extra '{ds.name}' → variable '{var_name}' shape={extra_dfs[var_name].shape}", flush=True)
+
+    # ── Build data context for ALL datasets ──────────────────────────────────
+    context_parts = [_data_context(df, primary.name)]
+    for ds, (var_name, edf) in zip(datasets[1:], extra_dfs.items()):
+        context_parts.append(_data_context(edf, ds.name))
+
+    # Tell the LLM about all available variable names
+    primary_var = _sanitize_var_name(primary.name)
+    var_list_str = "\n".join(
+        f"  - `{_sanitize_var_name(ds.name)}` — {ds.name} ({len(ds.data):,} rows)"
+        for ds in datasets
+    )
+    multi_note = (
+        f"\nAVAILABLE DATASETS IN SCOPE:\n{var_list_str}\n"
+        f"The primary dataset is also available as `df` (alias for `{primary_var}`).\n"
+        f"Use these variable names directly in code — do NOT re-load or re-import them.\n"
+        if len(datasets) > 1 else ""
+    )
+
+    full_context = multi_note + "\n\n---\n\n".join(context_parts)
+    system_prompt = DS_SYSTEM_STEP1.format(data_context=full_context)
     history_msgs = _build_lc_history(history[-6:]) if history else []
 
     llm = _get_llm(temperature=0.0)
@@ -336,7 +424,7 @@ def run_datascience_agent(
     chart_images: list[str] = []
     all_code = ""
     for block in code_blocks:
-        out, result_df, chart_img = _run_code(block, df)
+        out, result_df, chart_img = _run_code(block, df, extra_dfs)
         code_outputs.append(out)
         if result_df is not None:
             result_dfs.append(result_df)
@@ -438,6 +526,85 @@ async def chat(req: ChatRequest) -> ChatResponse:
             response=f"Agent error: {exc}",
             artifacts={"error": str(exc)},
         )
+
+
+@app.post("/prepare", response_model=PrepareResponse)
+async def prepare(req: PrepareRequest) -> PrepareResponse:
+    from api.data_preparation_agent import run_data_preparation
+    print(f"[/prepare] dataset='{req.dataset.name}' rows={len(req.dataset.data)} target='{req.target_column}'", flush=True)
+    try:
+        result = run_data_preparation(
+            data=req.dataset.data,
+            target_column=req.target_column,
+            test_size=req.test_size,
+            scale=req.scale,
+            correlation_threshold=req.correlation_threshold,
+            mode=req.mode,
+        )
+        return PrepareResponse(**result)
+    except Exception as exc:
+        traceback.print_exc()
+        return PrepareResponse(
+            success=False,
+            report=f"## Preparation Failed\n\n**Error:** {exc}",
+            error=str(exc),
+        )
+
+
+@app.post("/suggest-target", response_model=SuggestTargetResponse)
+async def suggest_target(req: SuggestTargetRequest) -> SuggestTargetResponse:
+    """Use LLM to pick the most appropriate target column from the dataset."""
+    import json as _json
+
+    cols = req.columns
+    if not cols:
+        return SuggestTargetResponse(target_column="", reason="No columns provided.")
+
+    sample_str = ""
+    if req.sample_data:
+        try:
+            sample_str = f"\n\nSample rows (first 3):\n{_json.dumps(req.sample_data[:3], default=str, indent=2)}"
+        except Exception:
+            pass
+
+    col_list = "\n".join(f"  - {c}" for c in cols)
+    prompt = (
+        "You are a senior data scientist. Identify the single best target column (dependent variable) "
+        "for a supervised machine learning task from the columns below.\n\n"
+        f"Columns:\n{col_list}{sample_str}\n\n"
+        "Selection rules (in priority order):\n"
+        "1. Column names that clearly indicate the outcome to predict: "
+        "target, label, class, y, output, result, outcome, prediction, response, "
+        "price, cost, salary, revenue, sales, churn, survived, diagnosis, fraud, "
+        "rating, score, grade, risk, default, approved, status, category, species.\n"
+        "2. If multiple candidates, prefer columns with low-to-medium cardinality "
+        "(good for classification) or continuous numeric (regression).\n"
+        "3. Avoid ID columns, timestamps, free-text, and columns that are clearly "
+        "input features (age, height, weight when a health outcome is also present).\n"
+        "4. If nothing stands out, pick the last column (common ML convention).\n\n"
+        "Reply ONLY with valid JSON, no markdown:\n"
+        '{"target_column": "<exact column name>", "reason": "<one concise sentence>"}'
+    )
+
+    try:
+        llm = _get_llm(temperature=0.0)
+        resp = llm.invoke(prompt)
+        content = resp.content.strip()
+        # Strip markdown code fences if present
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        data = _json.loads(content)
+        target = str(data.get("target_column", cols[-1]))
+        # Validate the column actually exists (case-insensitive match)
+        matched = next((c for c in cols if c == target), None) or \
+                  next((c for c in cols if c.lower() == target.lower()), cols[-1])
+        return SuggestTargetResponse(target_column=matched, reason=str(data.get("reason", "")))
+    except Exception as exc:
+        print(f"[/suggest-target] LLM error: {exc}", flush=True)
+        return SuggestTargetResponse(target_column=cols[-1], reason="Using last column as default.")
 
 
 @app.get("/health")
