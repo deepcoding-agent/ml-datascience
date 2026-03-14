@@ -221,10 +221,10 @@ def _run_code(
 
         _original_show = _plt_mod.show
         _plt_mod.show = _capture_show  # type: ignore[method-assign]
-        local_ns: dict[str, Any] = {"df": df, "pd": pd, "plt": _plt_mod}
+        local_ns: dict[str, Any] = {"df": df, "pd": pd, "plt": _plt_mod, "np": __import__("numpy")}
     else:
         _original_show = None
-        local_ns = {"df": df, "pd": pd}
+        local_ns = {"df": df, "pd": pd, "np": __import__("numpy")}
 
     # Inject all extra datasets by their sanitized name
     if extra_dfs:
@@ -327,18 +327,36 @@ IMPORTANT RULES:
 - Answer using the real numbers from the data context provided.
 - When a computation is needed, write ONE clean Python code block.
 - In code: `df` is already available. Do NOT re-load or re-import the data.
-- For numeric questions ("largest", "max", "average", etc.) use ONLY numeric columns:
-    df.select_dtypes(include='number')
 - Always use print() to output your results in code.
 - Do NOT explain what you would do — just do it.
 - For show/display/view/list row requests: ALWAYS assign the DataFrame slice to a variable named `result` first, then print it. Example: `result = df.head(10); print(result)`. Never do `print(df.head(10))` directly. NEVER use .T, .transpose(), or .iloc[0] — always return a proper rows × columns DataFrame.
+- For count/aggregate/stats questions ("how many", "count", "average", "sum", "total", "percentage", "top N", "distribution", "mean", "max", "min", "range", "between"): ALWAYS build a proper DataFrame and assign it to `result`, then print it. NEVER print a bare scalar or Series. Examples:
+    * "how many in each category" → `result = df.groupby('col').size().reset_index(name='count'); print(result)`
+    * "how many have price > X" → `result = pd.DataFrame({{'label': ['count'], 'value': [len(df[df['price'] > X])]}}); print(result)`
+    * "average price by bedrooms" → `result = df.groupby('bedrooms')['price'].mean().reset_index(); print(result)`
+    * "top 5 by price" → `result = df.nlargest(5, 'price'); print(result)`
+  This ensures the numbers always appear as a structured inline table.
 - For generate/modify/transform/create requests (replacing values, adding columns, filling NAs, filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply ALL modifications to `result` — NEVER modify `df` directly. At the end, print a short summary (e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
 - For visualization requests (plot, chart, graph, histogram, scatter, bar, line, etc.):
     - Use matplotlib.pyplot (already imported as `plt`) to create the chart.
+    - Call plt.tight_layout() BEFORE plt.show() — this prevents label/title overlap.
     - Call plt.show() at the end — the system will capture it automatically.
-    - Use plt.figure(figsize=(10, 5)) for a good default size.
-    - Always label axes and add a title.
-    - Assign a distinct color to EACH individual bar/point/slice so every value is visually distinguishable. Use this palette cycling through as needed: ["#FB8C3C", "#4C9BE8", "#2DC88A", "#AB63FA", "#FECB52", "#FF6692", "#19D3F3", "#D16C00", "#B6E880", "#F06A6A"]. Pass the list to the `color` parameter (e.g. bar colors via a list).
+    - Use plt.figure(figsize=(10, 6)) for a good default size (taller for legends).
+    - Always add a title (plt.title) and axis labels where applicable.
+    - COLORS: NEVER hardcode a fixed-length color list. Always generate colors that match the actual number of data points/categories at runtime:
+        * Scatter / line (N points): `colors = plt.cm.tab10(np.linspace(0, 1, len(data)))` then pass `color=colors`
+        * Bar chart (N bars): `colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))` then pass `color=colors`
+        * Single-color chart: pass a single string like `color="#FB8C3C"` — do NOT pass a list at all
+        * Categorical hue: use `c=pd.factorize(df['col'])[0]` with `cmap='tab10'`
+    - PIE CHARTS: NEVER use both labels= and autopct= on the wedges when there are more than 4 slices — they overlap. Instead:
+        * Use `labels=None` and `autopct=None` on the pie() call itself
+        * Move all labels to a legend: `plt.legend(labels, loc='best', bbox_to_anchor=(1, 0.5), fontsize=9)`
+        * Show percentages inside large slices only via a custom autopct that returns '' for slices < 5%:
+          `autopct=lambda p: f'{{p:.1f}}%' if p >= 5 else ''`
+        * Use `pctdistance=0.75` so percentage text sits cleanly inside the wedge
+    - BAR / HORIZONTAL BAR CHARTS: rotate x-axis labels when there are more than 5 categories:
+        `plt.xticks(rotation=45, ha='right', fontsize=9)`
+    - Always call `plt.tight_layout()` as the very last step before `plt.show()`.
 
 {data_context}
 """
@@ -464,7 +482,17 @@ def run_datascience_agent(
     _msg_lower = message.lower()
     _msg_words = set(_msg_lower.split())
 
-    # Detect "generate/create/modify" intent → always save as new dataset
+    # Detect visualization intent FIRST — overrides everything else (no new dataset)
+    _viz_keywords = {
+        "plot", "chart", "graph", "histogram", "scatter", "bar", "line",
+        "pie", "heatmap", "boxplot", "box", "violinplot", "violin",
+        "visualize", "visualise", "visualization", "visualisation",
+        "distribution", "correlation", "pairplot", "trend",
+    }
+    _is_viz_intent = bool(_msg_words & _viz_keywords) or bool(chart_images)
+
+    # Detect "generate/create/modify" intent → save as new dataset
+    # Visualization requests are excluded even if they contain overlapping words
     _generate_keywords = {
         "generate", "create", "make", "build", "produce", "construct",
         "add", "insert", "put", "introduce", "inject",
@@ -475,16 +503,30 @@ def run_datascience_agent(
         "encode", "normalize", "scale", "clean", "impute", "drop",
         "rename", "reorder", "sort", "filter", "subset",
     }
-    _is_generate_intent = bool(_msg_words & _generate_keywords)
+    _is_generate_intent = bool(_msg_words & _generate_keywords) and not _is_viz_intent
 
     # Detect "show/display/view" intent → show as inline table
     _show_keywords = {"show", "display", "view", "print", "head", "tail", "first", "last",
                       "list", "preview", "sample", "peek", "look", "see", "what", "rows"}
-    _is_show_intent = bool(_msg_words & _show_keywords) and not _is_generate_intent
+    _is_show_intent = bool(_msg_words & _show_keywords) and not _is_generate_intent and not _is_viz_intent
 
-    # Fallback: if show intent but no result_df was captured (e.g. LLM did print(df.head())),
-    # try to parse stdout output back into a proper rows×columns DataFrame
-    if _is_show_intent and not result_dfs and code_outputs:
+    # Detect stats/aggregate intent → show computed numbers as inline table
+    _stats_keywords = {
+        "how", "many", "count", "average", "mean", "median", "sum", "total",
+        "percentage", "percent", "top", "bottom", "highest", "lowest",
+        "between", "range", "above", "below", "over", "under", "most", "least",
+        "number", "much", "often", "frequently", "compare", "breakdown",
+        "each", "per", "group", "category", "categories",
+    }
+    _is_stats_intent = (
+        bool(_msg_words & _stats_keywords)
+        and not _is_generate_intent
+        and not _is_viz_intent
+        and not _is_show_intent
+    )
+
+    # Fallback: if show/stats intent but no result_df was captured, parse stdout into a DataFrame
+    if (_is_show_intent or _is_stats_intent) and not result_dfs and code_outputs:
         try:
             import io as _io
             raw_out = code_outputs[0].strip()
@@ -495,10 +537,10 @@ def run_datascience_agent(
             pass
 
     # Fallback for generate intent: if LLM modified df in-place (no new result df captured),
-    # use the sandbox df as the result — but only if it differs from the original df shape or values
-    if _is_generate_intent and not result_dfs and sandbox_dfs:
+    # use the sandbox df as the result — but only if it differs from the original df shape or values.
+    # Visualization intent is explicitly excluded — plot code leaves df unchanged on purpose.
+    if _is_generate_intent and not _is_viz_intent and not result_dfs and sandbox_dfs:
         sandbox_df_candidate = sandbox_dfs[-1]  # last executed block's df state
-        # Use it if shape changed or we can detect mutations (always safe to use for generate intent)
         if len(sandbox_df_candidate) > 0:
             result_dfs.append(sandbox_df_candidate)
             print(f"[DS-Agent] fallback: using sandbox df shape={sandbox_df_candidate.shape}", flush=True)
