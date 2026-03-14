@@ -3937,17 +3937,17 @@ def _apply_streamlit_plot_style(fig):
     except Exception:
         return fig
 
-    colorway = list(getattr(pc.qualitative, "Plotly", [])) or [
-        "#636EFA",
-        "#EF553B",
-        "#00CC96",
-        "#AB63FA",
+    colorway = [
+        "#FB8C3C",
+        "#D16C00",
         "#FFA15A",
-        "#19D3F3",
+        "#FECB52",
         "#FF6692",
+        "#00CC96",
+        "#19D3F3",
+        "#AB63FA",
         "#B6E880",
         "#FF97FF",
-        "#FECB52",
     ]
 
     def _is_black(val) -> bool:
