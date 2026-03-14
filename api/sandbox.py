@@ -1,0 +1,156 @@
+"""
+Code sandbox — executes LLM-generated Python safely in an isolated namespace.
+
+matplotlib is configured once at import time (Agg backend).
+numpy is imported once at module level and injected into every sandbox run.
+"""
+from __future__ import annotations
+
+import base64
+import io
+from contextlib import redirect_stdout
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from api.logger import get_logger
+
+log = get_logger(__name__)
+
+# ── matplotlib — configure non-interactive backend once ──────────────────────
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt
+    _MPL = True
+except ImportError:
+    _plt = None   # type: ignore[assignment]
+    _MPL = False
+
+# ── Result variable priority (most explicit → least) ─────────────────────────
+_RESULT_PRIORITY = [
+    "result", "df_result", "output_df", "df_out",
+    "df_new", "df_filtered", "filtered_df",
+    "transformed_df", "df_clean", "df_transformed",
+]
+
+
+def run_code(
+    code: str,
+    df: pd.DataFrame,
+    extra_dfs: dict[str, pd.DataFrame] | None = None,
+) -> tuple[str, pd.DataFrame | None, str | None, pd.DataFrame | None]:
+    """
+    Execute *code* in a restricted namespace containing `df`, `pd`, `np`,
+    and optionally extra named DataFrames.
+
+    Returns
+    -------
+    (stdout, result_df, chart_base64, sandbox_df)
+      stdout       — captured print output (or error message)
+      result_df    — first new non-empty DataFrame detected in the namespace
+      chart_base64 — first captured matplotlib figure as a PNG base64 string
+      sandbox_df   — state of `df` after execution (may differ if mutated)
+    """
+    buf = io.StringIO()
+    captured_charts: list[str] = []
+    input_ids = {id(df)} | {id(v) for v in (extra_dfs or {}).values()}
+
+    # Build sandbox namespace — numpy imported once at module level
+    if _MPL:
+        def _capture() -> None:
+            fig = _plt.gcf()
+            if fig.get_axes():
+                img = io.BytesIO()
+                fig.savefig(img, format="png", bbox_inches="tight", dpi=130)
+                img.seek(0)
+                captured_charts.append(base64.b64encode(img.read()).decode())
+                _plt.close(fig)
+
+        original_show = _plt.show
+        _plt.show = _capture  # type: ignore[method-assign]
+        ns: dict[str, Any] = {"df": df, "pd": pd, "np": np, "plt": _plt}
+    else:
+        original_show = None
+        ns = {"df": df, "pd": pd, "np": np}
+
+    if extra_dfs:
+        ns.update(extra_dfs)
+
+    try:
+        with redirect_stdout(buf):
+            exec(compile(code, "<agent_code>", "exec"), ns)
+
+        # Capture any figures created without an explicit plt.show()
+        if _MPL:
+            for _ in _plt.get_fignums():
+                _capture()
+            _plt.close("all")
+
+        stdout = buf.getvalue().strip()
+
+        # Try to render the last expression inline (e.g. bare `df.head()`)
+        lines = [
+            ln for ln in code.strip().splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        if lines:
+            try:
+                val = eval(compile(lines[-1], "<last>", "eval"), ns)
+                if val is not None:
+                    if isinstance(val, pd.DataFrame):
+                        extra = val.head(5).to_markdown(index=False)
+                    elif isinstance(val, pd.Series):
+                        extra = val.to_string()
+                    else:
+                        extra = str(val)
+                    stdout = (stdout + "\n" + extra).strip() if stdout else extra
+            except Exception:
+                pass
+
+        stdout = stdout or "(code ran successfully, no output)"
+
+        result_df = _find_result_df(ns, input_ids, len(df.columns))
+        chart_b64 = captured_charts[0] if captured_charts else None
+        sandbox_df = ns.get("df") if isinstance(ns.get("df"), pd.DataFrame) else None
+
+        return stdout, result_df, chart_b64, sandbox_df
+
+    except Exception as exc:
+        log.error("sandbox execution error: %s", exc)
+        return f"Code execution error: {exc}", None, None, None
+    finally:
+        if _MPL and original_show is not None:
+            _plt.show = original_show  # type: ignore[method-assign]
+            _plt.close("all")
+
+
+def _find_result_df(
+    ns: dict[str, Any],
+    input_ids: set[int],
+    n_input_cols: int,
+) -> pd.DataFrame | None:
+    """
+    Scan the sandbox namespace for a new, non-empty DataFrame.
+    Checks priority names first, then falls back to any other DataFrame.
+    Rejects DataFrames that look like transposed Series (2 cols × n_input_cols rows).
+    """
+    def _valid(df: pd.DataFrame) -> bool:
+        if id(df) in input_ids or len(df) == 0:
+            return False
+        # Reject transposed-series shape
+        if len(df.columns) == 2 and len(df) == n_input_cols:
+            return False
+        return True
+
+    for name in _RESULT_PRIORITY:
+        val = ns.get(name)
+        if isinstance(val, pd.DataFrame) and _valid(val):
+            return val
+
+    for val in ns.values():
+        if isinstance(val, pd.DataFrame) and _valid(val):
+            return val
+
+    return None
