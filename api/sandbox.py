@@ -18,11 +18,28 @@ from api.logger import get_logger
 
 log = get_logger(__name__)
 
-# ── matplotlib — configure non-interactive backend once ──────────────────────
+# ── matplotlib — configure non-interactive backend + Thai font support ────────
 try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as _plt
+    import matplotlib.font_manager as _fm
+
+    # Find a font that supports Thai glyphs (fallback chain)
+    _THAI_FONT = None
+    for _candidate in ["Tahoma", "Arial Unicode MS", "Noto Sans Thai"]:
+        try:
+            _path = _fm.findfont(_fm.FontProperties(family=_candidate), fallback_to_default=False)
+            if _path and "DejaVu" not in _path:
+                _THAI_FONT = _candidate
+                break
+        except ValueError:
+            pass
+    if _THAI_FONT:
+        matplotlib.rcParams["font.family"] = "sans-serif"
+        matplotlib.rcParams["font.sans-serif"] = [_THAI_FONT, "DejaVu Sans"]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+
     _MPL = True
 except ImportError:
     _plt = None   # type: ignore[assignment]
@@ -46,15 +63,33 @@ except ImportError:
 
 # ── plotly ───────────────────────────────────────────────────────────────────
 try:
+    import plotly
     import plotly.express as _px
     import plotly.graph_objects as _go
     import plotly.io as _pio
+    import plotly.figure_factory as _ff
+    from plotly.subplots import make_subplots as _make_subplots
     _PLOTLY = True
 except ImportError:
-    _px = None    # type: ignore[assignment]
-    _go = None    # type: ignore[assignment]
-    _pio = None   # type: ignore[assignment]
+    plotly = None  # type: ignore[assignment]
+    _px = None     # type: ignore[assignment]
+    _go = None     # type: ignore[assignment]
+    _pio = None    # type: ignore[assignment]
+    _ff = None     # type: ignore[assignment]
+    _make_subplots = None  # type: ignore[assignment]
     _PLOTLY = False
+
+# PrepPilot Plotly theme — applied to every captured figure
+_PREPPILOT_LAYOUT = dict(
+    template="plotly_white",
+    font=dict(family="Inter, Noto Sans Thai, Tahoma, sans-serif", size=13),
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    margin=dict(l=40, r=20, t=50, b=40),
+    hoverlabel=dict(bgcolor="white", font_size=13, font_family="Inter, Noto Sans Thai, Tahoma, sans-serif"),
+    colorway=["#FF6B35", "#2EC4B6", "#E71D36", "#FF9F1C",
+              "#6B4226", "#A8DADC", "#457B9D", "#1D3557"],
+)
 
 # ── Result variable priority (most explicit → least) ─────────────────────────
 _RESULT_PRIORITY = [
@@ -115,6 +150,9 @@ def run_code(
     if _PLOTLY:
         ns["px"] = _px
         ns["go"] = _go
+        ns["ff"] = _ff
+        ns["make_subplots"] = _make_subplots
+        ns["plotly"] = plotly
 
     if extra_dfs:
         ns.update(extra_dfs)
@@ -152,11 +190,14 @@ def run_code(
 
         stdout = stdout or "(code ran successfully, no output)"
 
-        # Capture Plotly figures from namespace
+        # Capture Plotly figures from namespace and apply PrepPilot theme
         if _PLOTLY:
+            seen_ids: set[int] = set()
             for val in ns.values():
-                if hasattr(val, "to_json") and type(val).__module__.startswith("plotly"):
+                if hasattr(val, "to_json") and type(val).__module__.startswith("plotly") and id(val) not in seen_ids:
+                    seen_ids.add(id(val))
                     try:
+                        val.update_layout(**_PREPPILOT_LAYOUT)
                         captured_plotly.append(val.to_json())
                     except Exception:
                         pass

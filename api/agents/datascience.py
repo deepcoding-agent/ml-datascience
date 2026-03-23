@@ -35,8 +35,21 @@ You are an expert data scientist. The dataset is ALREADY LOADED into a pandas Da
 You can see the actual data below — use it to answer directly.
 
 IMPORTANT RULES:
+- Be CONCISE. Answer directly first, then explain briefly (2-3 sentences max).
+- Do NOT write long introductions or restate the question.
+- Do NOT over-explain obvious things. Users are data scientists, not beginners.
+- If generating code, just write the code with minimal comments. No paragraph before/after.
 - NEVER say you don't have access to the data. You DO have it — it is shown below.
 - Answer using the real numbers from the data context provided.
+- COLUMN MATCHING: When the user mentions a concept (e.g. "garage", "price", "bedroom"), \
+find the EXACT column name from the dataset context that best matches. \
+ALWAYS verify the column exists in df.columns before using it. \
+If ambiguous, print df.columns.tolist() first and pick the closest match. \
+NEVER guess or hallucinate column names — use only columns that appear in the data context. \
+Example: user says "garage" → check columns → find "GarageCars" → use "GarageCars".
+- LANGUAGE: Always respond in the same language the user used. If the user writes in Thai, \
+respond in Thai. If English, respond in English. Chart titles and axis labels should also \
+match the user's language.
 - When a computation is needed, write ONE clean Python code block.
 - In code: `df` is already available. Do NOT re-load or re-import the data.
 - Always use print() to output your results in code.
@@ -59,140 +72,52 @@ filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply A
 to `result` — NEVER modify `df` directly. At the end, print a short summary \
 (e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
 
-VISUALIZATION RULES — Available libraries: matplotlib (plt), seaborn (sns), missingno (msno), plotly (px, go).
-- Default to matplotlib/seaborn for static charts. Use plotly (px/go) when the user asks for \
-"interactive" charts or when it's clearly better (large scatter plots, maps).
-- Call plt.tight_layout() BEFORE plt.show() — this prevents label/title overlap.
-- Call plt.show() at the end — the system captures it automatically.
-- Use plt.figure(figsize=(10, 6)) for a good default size.
-- Always add a title and axis labels where applicable.
-- COLORS: NEVER hardcode a fixed-length color list. Generate colors that match data at runtime:
-    * Scatter / line: `colors = plt.cm.tab10(np.linspace(0, 1, len(data)))`
-    * Bar chart: `colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))`
-    * Single-color: pass a string like `color="#FB8C3C"`
-    * Categorical hue: use `c=pd.factorize(df['col'])[0]` with `cmap='tab10'`
-- PIE CHARTS (>4 slices): use `labels=None` on pie(), move labels to legend, use \
-`autopct=lambda p: f'{{p:.1f}}%' if p >= 5 else ''`, `pctdistance=0.75`.
-- BAR CHARTS (>5 categories): `plt.xticks(rotation=45, ha='right', fontsize=9)`
-- Always call `plt.tight_layout()` as the very last step before `plt.show()`.
-- For Plotly: assign the figure to a variable named `fig` (e.g. `fig = px.scatter(...)`). \
-The system captures it automatically. Do NOT call `fig.show()`.
+CHART GENERATION RULES — MUST FOLLOW EXACTLY:
 
-VISUALIZATION TEMPLATES — use these patterns when the user asks for specific chart types:
+Always use Plotly for charts. Never use matplotlib or seaborn for visualization.
+Available: px (plotly.express), go (plotly.graph_objects), ff (plotly.figure_factory), make_subplots.
 
-1. Correlation heatmap:
-```python
-num_df = df.select_dtypes(include='number')
-plt.figure(figsize=(12, 8))
-sns.heatmap(num_df.corr(), annot=True, fmt='.2f', cmap='RdYlBu_r', center=0,
-            square=True, linewidths=0.5)
-plt.title('Correlation Heatmap')
-plt.tight_layout()
-plt.show()
-```
+Always assign the figure to a variable named exactly `fig`:
+  fig = px.bar(...)
+  fig = px.histogram(...)
+  fig = go.Figure(...)
 
-2. Distribution plots (histograms + KDE):
-```python
-num_cols = df.select_dtypes(include='number').columns
-n = len(num_cols)
-fig, axes = plt.subplots((n+2)//3, 3, figsize=(14, 4*((n+2)//3)))
-axes = axes.flatten() if n > 1 else [axes]
-for i, col in enumerate(num_cols):
-    sns.histplot(df[col].dropna(), kde=True, ax=axes[i], color='#FB8C3C')
-    axes[i].set_title(col, fontsize=11)
-for j in range(i+1, len(axes)): axes[j].set_visible(False)
-plt.tight_layout()
-plt.show()
-```
+Do NOT call fig.show() — the system captures fig automatically.
+Do NOT call plt.show() — do not use matplotlib for charts.
+Do NOT import plotly — it is already available.
 
-3. Pairplot (numeric columns, max 6):
-```python
-num_cols = df.select_dtypes(include='number').columns[:6]
-sns.pairplot(df[num_cols].dropna(), diag_kind='kde',
-             plot_kws={{'alpha': 0.6, 's': 20}})
-plt.tight_layout()
-plt.show()
-```
+Always include a meaningful title and axis labels.
+Always add hover_data with relevant columns when using px.scatter or px.bar.
 
-4. Box plots (outlier visualization):
-```python
-num_cols = df.select_dtypes(include='number').columns
-n = len(num_cols)
-fig, axes = plt.subplots(1, min(n, 6), figsize=(3*min(n, 6), 5))
-axes = [axes] if n == 1 else list(axes) if n <= 6 else list(axes)
-for i, col in enumerate(num_cols[:6]):
-    sns.boxplot(y=df[col].dropna(), ax=axes[i], color='#FB8C3C')
-    axes[i].set_title(col, fontsize=10)
-plt.tight_layout()
-plt.show()
-```
+Chart type mapping — use these exactly:
+- Bar chart:         fig = px.bar(df, x='col', y='count', title='...')
+- Histogram:         fig = px.histogram(df, x='col', title='...', marginal='box')
+- Scatter:           fig = px.scatter(df, x='col1', y='col2', color='col3', title='...')
+- Line chart:        fig = px.line(df, x='col1', y='col2', title='...')
+- Box plot:          fig = px.box(df, y='col', title='...')
+- Correlation:       fig = px.imshow(df.select_dtypes('number').corr(), title='Correlation Matrix', text_auto='.2f', color_continuous_scale='RdYlBu_r')
+- Pie chart:         Group into top 5 + "Other" if >5 categories, then: \
+fig = px.pie(pie_df, names='category', values='count', title='...', hole=0.3)
+- Violin:            fig = px.violin(df, y='col', title='...')
+- Missing values:    fig = px.imshow(df.isnull().astype(int), title='Missing Values', color_continuous_scale=['white','#FF6B35'])
+- Pairplot:          fig = px.scatter_matrix(df, dimensions=['col1','col2','col3'], title='...')
+- Feature importance: fig = px.bar(imp_df.sort_values('importance'), x='importance', y='feature', orientation='h', title='Feature Importance')
+- Multiple subplots: Use make_subplots(rows=r, cols=c) then fig.add_trace(go.Bar/Scatter/etc, row=r, col=c)
 
-5. Class balance bar chart:
-```python
-target = 'TARGET_COL'  # replace with actual target column
-counts = df[target].value_counts()
-colors = plt.cm.tab10(np.linspace(0, 1, len(counts)))
-plt.figure(figsize=(8, 5))
-plt.bar(counts.index.astype(str), counts.values, color=colors)
-plt.title(f'Class Balance: {{target}}')
-plt.ylabel('Count')
-plt.xticks(rotation=45, ha='right')
-plt.tight_layout()
-plt.show()
-```
+PIE CHART RULES (MUST FOLLOW):
+- If more than 5 categories: group smallest into "Other" before plotting:
+    counts = df['col'].value_counts()
+    if len(counts) > 5:
+        top5 = counts.head(5)
+        other = pd.Series({{'Other': counts.iloc[5:].sum()}})
+        counts = pd.concat([top5, other])
+    pie_df = counts.reset_index(); pie_df.columns = ['category', 'count']
+    fig = px.pie(pie_df, names='category', values='count', title='...', hole=0.3)
+- Always use: fig.update_traces(textposition='inside', textinfo='label+percent')
+- For readability: fig.update_layout(uniformtext_minsize=11, uniformtext_mode='hide')
 
-6. Missing value heatmap:
-```python
-plt.figure(figsize=(12, 6))
-msno.matrix(df, figsize=(12, 6), fontsize=10, sparkline=False)
-plt.title('Missing Value Pattern')
-plt.tight_layout()
-plt.show()
-```
-
-7. Feature importance (after training):
-```python
-from sklearn.ensemble import RandomForestClassifier
-X = df.select_dtypes(include='number').dropna()
-y = df['TARGET_COL']  # replace
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X, y)
-importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=True)
-plt.figure(figsize=(10, max(5, len(importances)*0.4)))
-importances.plot.barh(color='#FB8C3C')
-plt.title('Feature Importance')
-plt.xlabel('Importance')
-plt.tight_layout()
-plt.show()
-```
-
-8. Confusion matrix:
-```python
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-# cm = confusion_matrix(y_true, y_pred)
-# ConfusionMatrixDisplay(cm, display_labels=classes).plot(cmap='Oranges')
-# plt.title('Confusion Matrix')
-# plt.tight_layout()
-# plt.show()
-```
-
-9. ROC curve:
-```python
-from sklearn.metrics import roc_curve, auc
-# fpr, tpr, _ = roc_curve(y_true, y_score)
-# plt.figure(figsize=(8, 6))
-# plt.plot(fpr, tpr, color='#FB8C3C', lw=2, label=f'AUC = {{auc(fpr, tpr):.3f}}')
-# plt.plot([0,1], [0,1], 'k--', lw=1)
-# plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
-# plt.title('ROC Curve'); plt.legend()
-# plt.tight_layout(); plt.show()
-```
-
-10. Interactive Plotly scatter:
-```python
-fig = px.scatter(df, x='COL_X', y='COL_Y', color='COL_HUE',
-                 title='Scatter Plot', template='plotly_white')
-```
+Fallback: Only use matplotlib (plt) if specifically needed for missingno (msno) or sklearn ConfusionMatrixDisplay.
+If using matplotlib, call plt.tight_layout() before plt.show().
 
 {data_context}
 """
@@ -201,12 +126,18 @@ DS_SYSTEM_STEP2 = """\
 You are a data science assistant. A user asked a question, code was executed against the dataset,
 and the output is shown below. Write a focused, well-structured answer in plain English.
 
+Dataset info:
+{dataset_info}
+
 Guidelines:
-- Cover all key findings — do not omit important results.
-- Interpret the numbers, don't just repeat them (explain what they mean).
-- Use bullet points for multiple items; use short paragraphs for explanation.
-- Avoid padding, repetition, or over-explaining obvious things.
-- End with a **Summary** section (1–2 sentences) that captures the core answer.
+- Lead with the direct answer or key finding in the first sentence.
+- Keep explanations to 2-3 sentences. Do not pad or repeat.
+- Use bullet points for multiple findings — no more than 5 bullets.
+- Skip the Summary section if the answer is already short (under 4 sentences).
+- Do NOT restate the question or say "Based on the output..."
+- Reference specific column names and values from the dataset when relevant.
+- If the user refers to earlier conversation context, use the history provided.
+- LANGUAGE: Respond in the same language the user used. Thai question → Thai answer.
 
 User question: {question}
 Code executed:
@@ -229,11 +160,17 @@ _GENERATE_KEYWORDS = {
     "generate", "create", "make", "build", "produce", "construct",
     "add", "insert", "put", "introduce", "inject",
     "modify", "transform", "change", "update", "replace", "edit",
-    "augment", "simulate", "synthesize", "fabricate", "random",
-    "new", "missing", "na", "nan", "null", "duplicate", "shuffle",
+    "augment", "simulate", "synthesize", "fabricate",
     "merge", "join", "concat", "combine", "split", "sample",
-    "encode", "normalize", "scale", "clean", "impute", "drop",
+    "encode", "normalize", "scale", "clean", "impute",
     "rename", "reorder", "sort", "filter", "subset",
+}
+# These words are ambiguous — they appear in both query and generate contexts.
+# "how many nulls" = query,  "add null to 15% of data" = generate.
+# Resolved by checking DataFrame shape in determine_output_type().
+_AMBIGUOUS_KEYWORDS = {
+    "null", "missing", "na", "nan", "duplicate", "drop", "remove",
+    "delete", "random", "noise", "new", "shuffle", "fill",
 }
 _SHOW_KEYWORDS = {
     "show", "display", "view", "print", "head", "tail", "first", "last",
@@ -253,14 +190,50 @@ def _classify_intent(words: set[str], has_charts: bool) -> tuple[bool, bool, boo
     Return (is_viz, is_generate, is_show, is_stats) intent flags.
     Viz is checked first and gates the others.
     """
+    all_generate = _GENERATE_KEYWORDS | _AMBIGUOUS_KEYWORDS
     is_viz      = bool(words & _VIZ_KEYWORDS) or has_charts
-    is_generate = bool(words & _GENERATE_KEYWORDS) and not is_viz
+    is_generate = bool(words & all_generate) and not is_viz
     is_show     = bool(words & _SHOW_KEYWORDS) and not is_generate and not is_viz
     is_stats    = (
         bool(words & _STATS_KEYWORDS)
         and not is_generate and not is_viz and not is_show
     )
     return is_viz, is_generate, is_show, is_stats
+
+
+def _determine_output_type(
+    message: str,
+    is_generate: bool,
+    result_df: pd.DataFrame | None,
+) -> str:
+    """
+    Decides whether a result DataFrame is a real generated dataset ("generate")
+    or just a query summary ("query").
+
+    A query summary is a small DataFrame (few rows, few columns) that answers
+    a question like "how many nulls". A generated dataset is substantial
+    (many rows OR many columns).
+    """
+    if not is_generate or result_df is None:
+        return "query"
+
+    msg = message.lower()
+    # If message is clearly a question, it's a query regardless of keywords
+    question_starters = ("how many", "what is", "what are", "count of", "show me",
+                         "describe", "display", "view", "tell me", "which", "where")
+    if any(msg.startswith(q) or msg.startswith(q.replace(" ", "")) for q in question_starters):
+        # Unless it also has strong generate verbs
+        strong_generate = {"add", "create", "generate", "insert", "merge", "encode",
+                           "normalize", "scale", "transform", "fill", "replace",
+                           "rename", "filter", "clean", "impute", "split", "augment"}
+        if not any(v in msg for v in strong_generate):
+            return "query"
+
+    # Small DataFrames (≤10 rows AND ≤3 cols) are likely summaries, not generated data
+    if len(result_df) <= 10 and len(result_df.columns) <= 3:
+        return "query"
+
+    return "generate"
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
@@ -308,18 +281,18 @@ def run_datascience_agent(
     full_context = multi_note + "\n\n---\n\n".join(ctx_parts)
     system_prompt = DS_SYSTEM_STEP1.format(data_context=full_context)
 
-    llm = get_llm(temperature=0.0)
-    history_msgs = build_lc_history(history[-6:]) if history else []
+    history_msgs = build_lc_history(history[-20:]) if history else []
 
     # ── Step 1: LLM generates answer / code ──────────────────────────────────
     log.info("  [3/5] calling LLM (step-1: generate answer/code) …")
     t_llm1 = time.perf_counter()
+    llm_step1 = get_llm(temperature=0.0, max_tokens=1024)
     msgs = (
         [SystemMessage(content=system_prompt)]
         + history_msgs
         + [HumanMessage(content=message)]
     )
-    step1_reply = llm.invoke(msgs).content
+    step1_reply = llm_step1.invoke(msgs).content
     log.info("  [3/5] LLM step-1 done  (%.1fs)", time.perf_counter() - t_llm1)
 
     # ── Step 2: execute code blocks ───────────────────────────────────────────
@@ -377,10 +350,28 @@ def run_datascience_agent(
         artifacts["code_output"] = combined
         log.info("  [5/5] calling LLM (step-2: interpret output) …")
         t_llm2 = time.perf_counter()
+
+        # Build compact dataset metadata for the interpretation step
+        ds_info_parts = []
+        for ds in datasets:
+            cols = list(pd.DataFrame(ds.data[:1]).columns) if ds.data else []
+            ds_info_parts.append(
+                f"- {ds.name}: {len(ds.data):,} rows, {len(cols)} cols → {cols[:15]}"
+            )
+        dataset_info = "\n".join(ds_info_parts) if ds_info_parts else "(no dataset)"
+
         interp = DS_SYSTEM_STEP2.format(
-            question=message, code=all_code, output=combined
+            question=message, code=all_code, output=combined,
+            dataset_info=dataset_info,
         )
-        final_text = llm.invoke([SystemMessage(content=interp)]).content
+        # Include conversation history so the LLM can resolve follow-up references
+        interp_msgs = (
+            [SystemMessage(content=interp)]
+            + history_msgs
+            + [HumanMessage(content=f"Original question: {message}\nInterpret the execution output above.")]
+        )
+        llm_step2 = get_llm(temperature=0.0, max_tokens=512)
+        final_text = llm_step2.invoke(interp_msgs).content
         log.info("  [5/5] LLM step-2 done  (%.1fs)", time.perf_counter() - t_llm2)
     else:
         log.info("  [5/5] no code executed — using step-1 reply as final answer")
@@ -415,31 +406,56 @@ def run_datascience_agent(
             result_dfs.append(candidate)
             log.info("  sandbox-df fallback  shape=%s", candidate.shape)
 
-    log.info("━━ DS-Agent done  total=%.1fs ━━", time.perf_counter() - t0)
+    # ── Determine output_type ─────────────────────────────────────────────────
+    has_charts = bool(chart_images) or bool(chart_jsons)
+    result_df = result_dfs[0] if result_dfs else None
 
-    if not result_dfs:
+    if result_df is None and not has_charts:
+        artifacts["output_type"] = "text"
+        artifacts["should_activate"] = False
+        log.info("━━ DS-Agent done  output_type=text  total=%.1fs ━━", time.perf_counter() - t0)
         return final_text, artifacts
 
-    result_df = result_dfs[0]
-    rows_data  = result_df.to_dict(orient="records")
+    real_output = _determine_output_type(message, is_generate, result_df)
+    rows_data = result_df.to_dict(orient="records") if result_df is not None else None
 
-    if is_generate:
-        dataset_name = _generate_dataset_name(llm, message)
-        artifacts["data_wrangled"]  = rows_data
-        artifacts["dataset_name"]   = dataset_name
-        artifacts["dataset_shape"]  = {"rows": len(result_df), "cols": len(result_df.columns)}
+    if real_output == "generate" and rows_data is not None:
+        # Save as new dataset — user asked to create/modify data
+        dataset_name = _generate_dataset_name(message)
+        artifacts["data_wrangled"] = rows_data
+        artifacts["dataset_name"] = dataset_name
+        artifacts["dataset_shape"] = {"rows": len(result_df), "cols": len(result_df.columns)}
+        artifacts["output_type"] = "chart+dataset" if has_charts else "dataset"
+        artifacts["should_activate"] = False  # NEVER auto-activate
         log.info("  artifact: new dataset '%s'  shape=%s", dataset_name, result_df.shape)
-    else:
+    elif has_charts:
+        # Query with chart — show inline only
+        artifacts["output_type"] = "chart"
+        artifacts["should_activate"] = False
+        if rows_data is not None:
+            artifacts["inline_table"] = rows_data
+    elif rows_data is not None:
+        # Query result — show inline table only, do NOT save as dataset
         artifacts["inline_table"] = rows_data
+        artifacts["output_type"] = "table"
+        artifacts["should_activate"] = False
         log.info("  artifact: inline_table  rows=%d  cols=%d", len(result_df), len(result_df.columns))
+    else:
+        artifacts["output_type"] = "text"
+        artifacts["should_activate"] = False
 
+    log.info(
+        "━━ DS-Agent done  output_type=%s  real_output=%s  total=%.1fs ━━",
+        artifacts.get("output_type"), real_output, time.perf_counter() - t0,
+    )
     return final_text, artifacts
 
 
-def _generate_dataset_name(llm: Any, message: str) -> str:
+def _generate_dataset_name(message: str) -> str:
     """Ask the LLM for a short snake_case name for the generated dataset."""
     try:
-        reply = llm.invoke([HumanMessage(
+        llm_name = get_llm(temperature=0.0, max_tokens=50)
+        reply = llm_name.invoke([HumanMessage(
             content=(
                 f"Generate a short snake_case dataset name (max 5 words, no spaces) "
                 f"describing this data based on the user request: \"{message}\". "

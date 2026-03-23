@@ -30,8 +30,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
             text = run_coding_agent(req.message, req.conversation_history)
             artifacts = {}
 
-        log.info("✔ /chat done  artifact_keys=%s", list(artifacts.keys()))
-        return ChatResponse(response=text, artifacts=artifacts)
+        output_type = artifacts.pop("output_type", "text")
+        should_activate = artifacts.pop("should_activate", False)
+        log.info("✔ /chat done  output_type=%s  artifact_keys=%s", output_type, list(artifacts.keys()))
+        return ChatResponse(
+            response=text, artifacts=artifacts,
+            output_type=output_type, should_activate=should_activate,
+        )
 
     except Exception as exc:
         log.exception("✘ /chat unhandled error: %s", exc)

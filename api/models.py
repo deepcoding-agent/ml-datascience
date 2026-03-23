@@ -27,6 +27,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     artifacts: dict = {}
+    output_type: str = "text"              # text|table|chart|dataset|chart+dataset
+    should_activate: bool = False          # frontend should auto-switch to new dataset
 
 
 # ── Suggest target ────────────────────────────────────────────────────────────

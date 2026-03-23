@@ -96,9 +96,9 @@ def _infer_dtypes(
 
         # Try datetime
         try:
-            coerced_dt = pd.to_datetime(sample, errors="coerce")
+            coerced_dt = pd.to_datetime(sample, errors="coerce", format="mixed")
             if coerced_dt.notna().mean() >= 0.8:
-                df[col] = pd.to_datetime(df[col], errors="coerce")
+                df[col] = pd.to_datetime(df[col], errors="coerce", format="mixed")
                 inferred[col] = "datetime"
         except Exception:
             pass
