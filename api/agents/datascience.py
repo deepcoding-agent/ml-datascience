@@ -58,31 +58,141 @@ NEVER print a bare scalar or Series. Examples:
 filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply ALL modifications \
 to `result` — NEVER modify `df` directly. At the end, print a short summary \
 (e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
-- For visualization requests (plot, chart, graph, histogram, scatter, bar, line, etc.):
-    - Use matplotlib.pyplot (already imported as `plt`) to create the chart.
-    - Call plt.tight_layout() BEFORE plt.show() — this prevents label/title overlap.
-    - Call plt.show() at the end — the system will capture it automatically.
-    - Use plt.figure(figsize=(10, 6)) for a good default size (taller for legends).
-    - Always add a title (plt.title) and axis labels where applicable.
-    - COLORS: NEVER hardcode a fixed-length color list. Always generate colors that match the \
-actual number of data points/categories at runtime:
-        * Scatter / line (N points): `colors = plt.cm.tab10(np.linspace(0, 1, len(data)))` \
-then pass `color=colors`
-        * Bar chart (N bars): `colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))` \
-then pass `color=colors`
-        * Single-color chart: pass a single string like `color="#FB8C3C"` — do NOT pass a list
-        * Categorical hue: use `c=pd.factorize(df['col'])[0]` with `cmap='tab10'`
-    - PIE CHARTS: NEVER use both labels= and autopct= on the wedges when there are more than \
-4 slices — they overlap. Instead:
-        * Use `labels=None` and `autopct=None` on the pie() call itself
-        * Move all labels to a legend: \
-`plt.legend(labels, loc='best', bbox_to_anchor=(1, 0.5), fontsize=9)`
-        * Show percentages inside large slices only: \
-`autopct=lambda p: f'{{p:.1f}}%' if p >= 5 else ''`
-        * Use `pctdistance=0.75` so percentage text sits cleanly inside the wedge
-    - BAR / HORIZONTAL BAR CHARTS: rotate x-axis labels when there are more than 5 categories:
-        `plt.xticks(rotation=45, ha='right', fontsize=9)`
-    - Always call `plt.tight_layout()` as the very last step before `plt.show()`.
+
+VISUALIZATION RULES — Available libraries: matplotlib (plt), seaborn (sns), missingno (msno), plotly (px, go).
+- Default to matplotlib/seaborn for static charts. Use plotly (px/go) when the user asks for \
+"interactive" charts or when it's clearly better (large scatter plots, maps).
+- Call plt.tight_layout() BEFORE plt.show() — this prevents label/title overlap.
+- Call plt.show() at the end — the system captures it automatically.
+- Use plt.figure(figsize=(10, 6)) for a good default size.
+- Always add a title and axis labels where applicable.
+- COLORS: NEVER hardcode a fixed-length color list. Generate colors that match data at runtime:
+    * Scatter / line: `colors = plt.cm.tab10(np.linspace(0, 1, len(data)))`
+    * Bar chart: `colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))`
+    * Single-color: pass a string like `color="#FB8C3C"`
+    * Categorical hue: use `c=pd.factorize(df['col'])[0]` with `cmap='tab10'`
+- PIE CHARTS (>4 slices): use `labels=None` on pie(), move labels to legend, use \
+`autopct=lambda p: f'{{p:.1f}}%' if p >= 5 else ''`, `pctdistance=0.75`.
+- BAR CHARTS (>5 categories): `plt.xticks(rotation=45, ha='right', fontsize=9)`
+- Always call `plt.tight_layout()` as the very last step before `plt.show()`.
+- For Plotly: assign the figure to a variable named `fig` (e.g. `fig = px.scatter(...)`). \
+The system captures it automatically. Do NOT call `fig.show()`.
+
+VISUALIZATION TEMPLATES — use these patterns when the user asks for specific chart types:
+
+1. Correlation heatmap:
+```python
+num_df = df.select_dtypes(include='number')
+plt.figure(figsize=(12, 8))
+sns.heatmap(num_df.corr(), annot=True, fmt='.2f', cmap='RdYlBu_r', center=0,
+            square=True, linewidths=0.5)
+plt.title('Correlation Heatmap')
+plt.tight_layout()
+plt.show()
+```
+
+2. Distribution plots (histograms + KDE):
+```python
+num_cols = df.select_dtypes(include='number').columns
+n = len(num_cols)
+fig, axes = plt.subplots((n+2)//3, 3, figsize=(14, 4*((n+2)//3)))
+axes = axes.flatten() if n > 1 else [axes]
+for i, col in enumerate(num_cols):
+    sns.histplot(df[col].dropna(), kde=True, ax=axes[i], color='#FB8C3C')
+    axes[i].set_title(col, fontsize=11)
+for j in range(i+1, len(axes)): axes[j].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+3. Pairplot (numeric columns, max 6):
+```python
+num_cols = df.select_dtypes(include='number').columns[:6]
+sns.pairplot(df[num_cols].dropna(), diag_kind='kde',
+             plot_kws={{'alpha': 0.6, 's': 20}})
+plt.tight_layout()
+plt.show()
+```
+
+4. Box plots (outlier visualization):
+```python
+num_cols = df.select_dtypes(include='number').columns
+n = len(num_cols)
+fig, axes = plt.subplots(1, min(n, 6), figsize=(3*min(n, 6), 5))
+axes = [axes] if n == 1 else list(axes) if n <= 6 else list(axes)
+for i, col in enumerate(num_cols[:6]):
+    sns.boxplot(y=df[col].dropna(), ax=axes[i], color='#FB8C3C')
+    axes[i].set_title(col, fontsize=10)
+plt.tight_layout()
+plt.show()
+```
+
+5. Class balance bar chart:
+```python
+target = 'TARGET_COL'  # replace with actual target column
+counts = df[target].value_counts()
+colors = plt.cm.tab10(np.linspace(0, 1, len(counts)))
+plt.figure(figsize=(8, 5))
+plt.bar(counts.index.astype(str), counts.values, color=colors)
+plt.title(f'Class Balance: {{target}}')
+plt.ylabel('Count')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+```
+
+6. Missing value heatmap:
+```python
+plt.figure(figsize=(12, 6))
+msno.matrix(df, figsize=(12, 6), fontsize=10, sparkline=False)
+plt.title('Missing Value Pattern')
+plt.tight_layout()
+plt.show()
+```
+
+7. Feature importance (after training):
+```python
+from sklearn.ensemble import RandomForestClassifier
+X = df.select_dtypes(include='number').dropna()
+y = df['TARGET_COL']  # replace
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X, y)
+importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=True)
+plt.figure(figsize=(10, max(5, len(importances)*0.4)))
+importances.plot.barh(color='#FB8C3C')
+plt.title('Feature Importance')
+plt.xlabel('Importance')
+plt.tight_layout()
+plt.show()
+```
+
+8. Confusion matrix:
+```python
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+# cm = confusion_matrix(y_true, y_pred)
+# ConfusionMatrixDisplay(cm, display_labels=classes).plot(cmap='Oranges')
+# plt.title('Confusion Matrix')
+# plt.tight_layout()
+# plt.show()
+```
+
+9. ROC curve:
+```python
+from sklearn.metrics import roc_curve, auc
+# fpr, tpr, _ = roc_curve(y_true, y_score)
+# plt.figure(figsize=(8, 6))
+# plt.plot(fpr, tpr, color='#FB8C3C', lw=2, label=f'AUC = {{auc(fpr, tpr):.3f}}')
+# plt.plot([0,1], [0,1], 'k--', lw=1)
+# plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+# plt.title('ROC Curve'); plt.legend()
+# plt.tight_layout(); plt.show()
+```
+
+10. Interactive Plotly scatter:
+```python
+fig = px.scatter(df, x='COL_X', y='COL_Y', color='COL_HUE',
+                 title='Scatter Plot', template='plotly_white')
+```
 
 {data_context}
 """
@@ -217,6 +327,7 @@ def run_datascience_agent(
     code_outputs: list[str]          = []
     result_dfs:   list[pd.DataFrame] = []
     chart_images: list[str]          = []
+    chart_jsons:  list[str]          = []
     sandbox_dfs:  list[pd.DataFrame] = []
     all_code = ""
 
@@ -228,22 +339,24 @@ def run_datascience_agent(
     for i, block in enumerate(code_blocks, 1):
         log.debug("  sandbox block %d:\n%s", i, block[:400])
         t_exec = time.perf_counter()
-        stdout, result_df, chart_b64, sandbox_df = run_code(block, df, extra_dfs)
+        stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(block, df, extra_dfs)
         elapsed = time.perf_counter() - t_exec
 
         code_outputs.append(stdout)
         if result_df  is not None: result_dfs.append(result_df)
         if chart_b64  is not None: chart_images.append(chart_b64)
+        if chart_json is not None: chart_jsons.append(chart_json)
         if sandbox_df is not None: sandbox_dfs.append(sandbox_df)
 
         if stdout.startswith("Code execution error"):
             log.error("  sandbox block %d error (%.2fs): %s", i, elapsed, stdout)
         else:
             log.info(
-                "  sandbox block %d done (%.2fs)  result_df=%s  chart=%s  output='%s'",
+                "  sandbox block %d done (%.2fs)  result_df=%s  chart=%s  plotly=%s  output='%s'",
                 i, elapsed,
                 result_df.shape if result_df is not None else None,
                 chart_b64 is not None,
+                chart_json is not None,
                 stdout[:200],
             )
         all_code = (all_code + "\n" + block).strip()
@@ -254,6 +367,9 @@ def run_datascience_agent(
     if chart_images:
         artifacts["chart_image"] = chart_images[0]
         log.info("  chart captured  (total: %d)", len(chart_images))
+    if chart_jsons:
+        artifacts["chart_json"] = chart_jsons[0]
+        log.info("  plotly chart captured  (total: %d)", len(chart_jsons))
 
     # ── Step 3: LLM interprets execution output ───────────────────────────────
     if code_outputs and all_code:
@@ -272,7 +388,7 @@ def run_datascience_agent(
 
     # ── Step 4: surface result DataFrame ─────────────────────────────────────
     words = set(message.lower().split())
-    is_viz, is_generate, is_show, is_stats = _classify_intent(words, bool(chart_images))
+    is_viz, is_generate, is_show, is_stats = _classify_intent(words, bool(chart_images) or bool(chart_jsons))
     log.info(
         "  intent  viz=%s  generate=%s  show=%s  stats=%s",
         is_viz, is_generate, is_show, is_stats,

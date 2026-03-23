@@ -28,6 +28,34 @@ except ImportError:
     _plt = None   # type: ignore[assignment]
     _MPL = False
 
+# ── seaborn ──────────────────────────────────────────────────────────────────
+try:
+    import seaborn as _sns
+    _SNS = True
+except ImportError:
+    _sns = None   # type: ignore[assignment]
+    _SNS = False
+
+# ── missingno ────────────────────────────────────────────────────────────────
+try:
+    import missingno as _msno
+    _MSNO = True
+except ImportError:
+    _msno = None  # type: ignore[assignment]
+    _MSNO = False
+
+# ── plotly ───────────────────────────────────────────────────────────────────
+try:
+    import plotly.express as _px
+    import plotly.graph_objects as _go
+    import plotly.io as _pio
+    _PLOTLY = True
+except ImportError:
+    _px = None    # type: ignore[assignment]
+    _go = None    # type: ignore[assignment]
+    _pio = None   # type: ignore[assignment]
+    _PLOTLY = False
+
 # ── Result variable priority (most explicit → least) ─────────────────────────
 _RESULT_PRIORITY = [
     "result", "df_result", "output_df", "df_out",
@@ -40,21 +68,23 @@ def run_code(
     code: str,
     df: pd.DataFrame,
     extra_dfs: dict[str, pd.DataFrame] | None = None,
-) -> tuple[str, pd.DataFrame | None, str | None, pd.DataFrame | None]:
+) -> tuple[str, pd.DataFrame | None, str | None, pd.DataFrame | None, str | None]:
     """
     Execute *code* in a restricted namespace containing `df`, `pd`, `np`,
-    and optionally extra named DataFrames.
+    `sns`, `msno`, `px`, `go`, and optionally extra named DataFrames.
 
     Returns
     -------
-    (stdout, result_df, chart_base64, sandbox_df)
+    (stdout, result_df, chart_base64, sandbox_df, chart_json)
       stdout       — captured print output (or error message)
       result_df    — first new non-empty DataFrame detected in the namespace
       chart_base64 — first captured matplotlib figure as a PNG base64 string
       sandbox_df   — state of `df` after execution (may differ if mutated)
+      chart_json   — first captured Plotly figure as a JSON string
     """
     buf = io.StringIO()
     captured_charts: list[str] = []
+    captured_plotly: list[str] = []
     input_ids = {id(df)} | {id(v) for v in (extra_dfs or {}).values()}
 
     # Build sandbox namespace — numpy imported once at module level
@@ -74,6 +104,17 @@ def run_code(
     else:
         original_show = None
         ns = {"df": df, "pd": pd, "np": np}
+
+    # Inject seaborn
+    if _SNS:
+        ns["sns"] = _sns
+    # Inject missingno
+    if _MSNO:
+        ns["msno"] = _msno
+    # Inject plotly
+    if _PLOTLY:
+        ns["px"] = _px
+        ns["go"] = _go
 
     if extra_dfs:
         ns.update(extra_dfs)
@@ -111,15 +152,25 @@ def run_code(
 
         stdout = stdout or "(code ran successfully, no output)"
 
+        # Capture Plotly figures from namespace
+        if _PLOTLY:
+            for val in ns.values():
+                if hasattr(val, "to_json") and type(val).__module__.startswith("plotly"):
+                    try:
+                        captured_plotly.append(val.to_json())
+                    except Exception:
+                        pass
+
         result_df = _find_result_df(ns, input_ids, len(df.columns))
         chart_b64 = captured_charts[0] if captured_charts else None
+        chart_json = captured_plotly[0] if captured_plotly else None
         sandbox_df = ns.get("df") if isinstance(ns.get("df"), pd.DataFrame) else None
 
-        return stdout, result_df, chart_b64, sandbox_df
+        return stdout, result_df, chart_b64, sandbox_df, chart_json
 
     except Exception as exc:
         log.error("sandbox execution error: %s", exc)
-        return f"Code execution error: {exc}", None, None, None
+        return f"Code execution error: {exc}", None, None, None, None
     finally:
         if _MPL and original_show is not None:
             _plt.show = original_show  # type: ignore[method-assign]

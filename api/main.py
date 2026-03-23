@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.chat import router as chat_router
+from api.routes.eda_report import router as eda_router
 from api.routes.prepare import router as prepare_router
 from api.routes.suggest_target import router as suggest_router
 
@@ -33,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(eda_router)
 app.include_router(prepare_router)
 app.include_router(suggest_router)
 

@@ -41,6 +41,38 @@ class SuggestTargetResponse(BaseModel):
     reason: str
 
 
+# ── EDA report ────────────────────────────────────────────────────────────────
+
+class EDARequest(BaseModel):
+    dataset: DatasetPayload
+
+
+class ColumnProfile(BaseModel):
+    name: str
+    dtype: str
+    null_count: int = 0
+    null_pct: float = 0.0
+    unique_count: int = 0
+    top_values: dict = {}               # value → count (top 5)
+    mean: float | None = None
+    std: float | None = None
+    min: float | None = None
+    max: float | None = None
+    median: float | None = None
+    skewness: float | None = None
+
+
+class EDAResponse(BaseModel):
+    rows: int
+    columns: int
+    memory_mb: float
+    dtypes: dict[str, int] = {}         # dtype → count
+    column_profiles: list[ColumnProfile] = []
+    correlation: dict = {}              # nested dict of correlation matrix
+    charts: list[str] = []             # base64 PNG images
+    duration_seconds: float = 0.0
+
+
 # ── Data preparation ──────────────────────────────────────────────────────────
 
 class PrepConfig(BaseModel):
