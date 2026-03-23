@@ -43,30 +43,53 @@ class SuggestTargetResponse(BaseModel):
 
 # ── Data preparation ──────────────────────────────────────────────────────────
 
+class PrepConfig(BaseModel):
+    missing_strategy: str = "auto"          # auto|mean|median|mode|drop
+    scaling_method: str = "standard"        # standard|minmax|robust|none
+    encoding_method: str = "auto"           # auto|onehot|label|ordinal
+    outlier_treatment: str = "iqr"          # iqr|zscore|none
+    outlier_threshold: float = 1.5
+    correlation_threshold: float = 0.95
+    test_size: float = 0.2
+    random_state: int = 42
+    drop_threshold: float = 0.4             # drop col if missing > this ratio
+
+
 class PrepareRequest(BaseModel):
     dataset: DatasetPayload
     target_column: str | None = None
-    test_size: float = 0.2
-    scale: bool = True
-    correlation_threshold: float = 0.95
-    mode: str = "full"   # "full" | "clean" | "cleaning"
+    mode: str = "full"                      # "full" | "clean" | "cleaning"
+    config: PrepConfig = PrepConfig()
+
+
+class PrepReportDetail(BaseModel):
+    """Structured preprocessing report returned alongside the data."""
+    steps_applied: list[str] = []
+    columns_dropped: list[str] = []
+    missing_filled: dict[str, str] = {}     # col → strategy used
+    duplicates_removed: int = 0
+    outliers_clipped: dict[str, int] = {}   # col → count clipped
+    encodings_applied: dict[str, str] = {}  # col → method (onehot|label|ordinal)
+    scaler_used: str = "none"
+    dtype_inferred: dict[str, str] = {}     # col → new dtype
+    rows_before: int = 0
+    rows_after: int = 0
+    columns_before: int = 0
+    columns_after: int = 0
+    duration_seconds: float = 0.0
 
 
 class PrepareResponse(BaseModel):
     success: bool
     mode: str = "full"
-    report: str
-    steps: list[str] = []
+    report: str                             # human-readable markdown report
+    report_detail: PrepReportDetail = PrepReportDetail()
     target_column: str = ""
     target_type: str = ""
     feature_names: list[str] = []
     train_rows: int = 0
     test_rows: int = 0
     n_features: int = 0
-    dropped_columns: list[str] = []
-    corr_dropped: list[str] = []
-    encoded_columns: list[str] = []
-    scaled_columns: list[str] = []
     label_mappings: dict = {}
     target_label_map: dict | None = None
     X_train: list[dict] = []
