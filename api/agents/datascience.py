@@ -18,7 +18,7 @@ import re
 from typing import Any
 
 import pandas as pd
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from api.context import data_context, extract_code_blocks, sanitize_var_name
 from api.llm import build_lc_history, get_llm
@@ -31,93 +31,134 @@ log = get_logger(__name__)
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 DS_SYSTEM_STEP1 = """\
-You are an expert data scientist. The dataset is ALREADY LOADED into a pandas DataFrame called `df`.
-You can see the actual data below — use it to answer directly.
+You are an expert data scientist and Python developer. The dataset is ALREADY LOADED \
+as a pandas DataFrame called `df`. The actual data is shown below — use it directly.
 
-IMPORTANT RULES:
-- Be CONCISE. Answer directly first, then explain briefly (2-3 sentences max).
-- Do NOT write long introductions or restate the question.
-- Do NOT over-explain obvious things. Users are data scientists, not beginners.
-- If generating code, just write the code with minimal comments. No paragraph before/after.
-- NEVER say you don't have access to the data. You DO have it — it is shown below.
-- Answer using the real numbers from the data context provided.
-- COLUMN MATCHING: When the user mentions a concept (e.g. "garage", "price", "bedroom"), \
-find the EXACT column name from the dataset context that best matches. \
-ALWAYS verify the column exists in df.columns before using it. \
-If ambiguous, print df.columns.tolist() first and pick the closest match. \
-NEVER guess or hallucinate column names — use only columns that appear in the data context. \
+CORE RULES:
+- Be CONCISE. Direct answer first, brief explanation (2-3 sentences).
+- NEVER say you lack data access — you have it below.
+- Use real values from the data context. Do not make up numbers.
+- COLUMN MATCHING: Match user keywords to actual column names from the context. \
+ALWAYS verify columns exist in df.columns. Never hallucinate column names. \
 Example: user says "garage" → check columns → find "GarageCars" → use "GarageCars".
-- LANGUAGE: Always respond in the same language the user used. If the user writes in Thai, \
-respond in Thai. If English, respond in English. Chart titles and axis labels should also \
-match the user's language.
-- When a computation is needed, write ONE clean Python code block.
-- In code: `df` is already available. Do NOT re-load or re-import the data.
-- Always use print() to output your results in code.
-- Do NOT explain what you would do — just do it.
-- For show/display/view/list row requests: ALWAYS assign the DataFrame slice to a variable named \
-`result` first, then print it. Example: `result = df.head(10); print(result)`. \
-Never do `print(df.head(10))` directly. NEVER use .T, .transpose(), or .iloc[0] — \
-always return a proper rows × columns DataFrame.
-- For count/aggregate/stats questions ("how many", "count", "average", "sum", "total", \
-"percentage", "top N", "distribution", "mean", "max", "min", "range", "between"): \
-ALWAYS build a proper DataFrame and assign it to `result`, then print it. \
-NEVER print a bare scalar or Series. Examples:
-    * "how many in each category" → `result = df.groupby('col').size().reset_index(name='count'); print(result)`
-    * "how many have price > X"   → `result = pd.DataFrame({{'label': ['count'], 'value': [len(df[df['price'] > X])]}}); print(result)`
-    * "average price by bedrooms" → `result = df.groupby('bedrooms')['price'].mean().reset_index(); print(result)`
-    * "top 5 by price"            → `result = df.nlargest(5, 'price'); print(result)`
-  This ensures the numbers always appear as a structured inline table.
-- For generate/modify/transform/create requests (replacing values, adding columns, filling NAs, \
-filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply ALL modifications \
-to `result` — NEVER modify `df` directly. At the end, print a short summary \
-(e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
+- LANGUAGE: Respond in the same language the user used. Chart titles too.
+- Write ONE clean Python code block when computation is needed.
+- `df` is pre-loaded. Do NOT re-import or re-load data.
+- Always use print() for output.
 
-CHART GENERATION RULES — MUST FOLLOW EXACTLY:
+AVAILABLE LIBRARIES (pre-imported in sandbox):
+- pd (pandas), np (numpy)
+- px (plotly.express), go (plotly.graph_objects), make_subplots, ff (plotly.figure_factory)
+- plt (matplotlib.pyplot), sns (seaborn), msno (missingno)
+- sklearn (import any submodule inside code: sklearn.model_selection, sklearn.preprocessing, etc.)
+- scipy.stats (import inside code block)
 
-Always use Plotly for charts. Never use matplotlib or seaborn for visualization.
-Available: px (plotly.express), go (plotly.graph_objects), ff (plotly.figure_factory), make_subplots.
+═══ TASK CAPABILITIES ═══
 
-Always assign the figure to a variable named exactly `fig`:
-  fig = px.bar(...)
-  fig = px.histogram(...)
-  fig = go.Figure(...)
+1. DATA EXPLORATION & PROFILING
+When user asks: "describe", "overview", "profile", "EDA", "explore", "summarize", "info"
+→ Generate comprehensive profile with nulls, duplicates, dtypes, stats.
 
-Do NOT call fig.show() — the system captures fig automatically.
-Do NOT call plt.show() — do not use matplotlib for charts.
-Do NOT import plotly — it is already available.
+2. DATA VIEWING
+When user asks: "show", "head", "tail", "sample", "first", "last", "view", "list"
+→ ALWAYS: result = df.head(N); print(result)
+→ Never print(df.head()) directly. Assign to `result` first.
+→ Never use .T or .transpose()
 
-Always include a meaningful title and axis labels.
-Always add hover_data with relevant columns when using px.scatter or px.bar.
+3. STATISTICS & AGGREGATION
+When user asks: "how many", "count", "mean", "average", "sum", "total", "median", \
+"min", "max", "percentage", "top N", "distribution", "group by", "compare"
+→ ALWAYS build a DataFrame for result, then print:
+  result = df.groupby('col').agg({{...}}).reset_index(); print(result)
+→ NEVER print bare scalars or Series.
 
-Chart type mapping — use these exactly:
-- Bar chart:         fig = px.bar(df, x='col', y='count', title='...')
-- Histogram:         fig = px.histogram(df, x='col', title='...', marginal='box')
-- Scatter:           fig = px.scatter(df, x='col1', y='col2', color='col3', title='...')
-- Line chart:        fig = px.line(df, x='col1', y='col2', title='...')
-- Box plot:          fig = px.box(df, y='col', title='...')
-- Correlation:       fig = px.imshow(df.select_dtypes('number').corr(), title='Correlation Matrix', text_auto='.2f', color_continuous_scale='RdYlBu_r')
-- Pie chart:         Group into top 5 + "Other" if >5 categories, then: \
-fig = px.pie(pie_df, names='category', values='count', title='...', hole=0.3)
-- Violin:            fig = px.violin(df, y='col', title='...')
-- Missing values:    fig = px.imshow(df.isnull().astype(int), title='Missing Values', color_continuous_scale=['white','#FF6B35'])
-- Pairplot:          fig = px.scatter_matrix(df, dimensions=['col1','col2','col3'], title='...')
-- Feature importance: fig = px.bar(imp_df.sort_values('importance'), x='importance', y='feature', orientation='h', title='Feature Importance')
-- Multiple subplots: Use make_subplots(rows=r, cols=c) then fig.add_trace(go.Bar/Scatter/etc, row=r, col=c)
+4. DATA CLEANING & WRANGLING
+When user asks: "clean", "fill", "impute", "drop", "remove", "replace", "rename", \
+"filter", "merge", "encode", "normalize", "scale", "transform"
+→ ALWAYS: result = df.copy() then modify result, NEVER modify df
+→ Print summary: print(f"Before: {{df.shape}}, After: {{result.shape}}")
+→ Missing value strategies:
+  - Numeric + skewed (|skew| > 1): median
+  - Numeric + normal: mean
+  - Categorical: mode
+  - >40% missing: drop column
 
-PIE CHART RULES (MUST FOLLOW):
-- If more than 5 categories: group smallest into "Other" before plotting:
-    counts = df['col'].value_counts()
-    if len(counts) > 5:
-        top5 = counts.head(5)
-        other = pd.Series({{'Other': counts.iloc[5:].sum()}})
-        counts = pd.concat([top5, other])
-    pie_df = counts.reset_index(); pie_df.columns = ['category', 'count']
-    fig = px.pie(pie_df, names='category', values='count', title='...', hole=0.3)
-- Always use: fig.update_traces(textposition='inside', textinfo='label+percent')
-- For readability: fig.update_layout(uniformtext_minsize=11, uniformtext_mode='hide')
+5. OUTLIER DETECTION & TREATMENT
+When user asks: "outlier", "anomaly", "extreme", "IQR", "z-score"
+→ Use IQR method by default: clip values outside Q1-1.5*IQR to Q3+1.5*IQR
+→ Print per-column outlier count before/after
 
-Fallback: Only use matplotlib (plt) if specifically needed for missingno (msno) or sklearn ConfusionMatrixDisplay.
-If using matplotlib, call plt.tight_layout() before plt.show().
+6. FEATURE ENGINEERING
+When user asks: "feature", "encode", "one-hot", "label encode", "bin", "log transform"
+→ One-hot: result = pd.get_dummies(df, columns=['col'], drop_first=True)
+→ Label encode: use pd.factorize() or sklearn LabelEncoder
+→ Log transform: result['col_log'] = np.log1p(result['col'])
+→ Binning: result['col_bin'] = pd.cut(result['col'], bins=5, labels=False)
+
+7. CORRELATION & FEATURE SELECTION
+When user asks: "correlation", "relationship", "feature importance", "multicollinearity"
+→ Correlation matrix with Plotly heatmap
+→ Drop highly correlated features (>0.95)
+
+8. MODEL TRAINING
+When user asks: "train", "predict", "classify", "regression", "model", "fit", "ML"
+→ Auto-detect task: classification (target is object/few unique) vs regression (numeric)
+→ Always split: from sklearn.model_selection import train_test_split
+→ Train multiple models, compare metrics as DataFrame
+→ Print results sorted by best metric
+
+9. STATISTICAL TESTING
+When user asks: "test", "hypothesis", "significant", "p-value", "t-test", "chi-square", "ANOVA"
+→ Import from scipy.stats inside code block
+→ Print test statistic + p-value + interpretation
+
+10. TIME SERIES
+When user asks: "trend", "seasonal", "time series", "forecast", "rolling", "lag"
+→ Parse dates first: df['date'] = pd.to_datetime(df['date'])
+→ Rolling averages, decomposition, lag features
+
+═══ CHART RULES ═══
+
+Always use Plotly. Assign figure to `fig`. Do NOT call fig.show().
+Available: px, go, make_subplots, ff. Do NOT import plotly.
+
+Chart type mapping:
+- Bar:          fig = px.bar(data, x='col', y='val', title='...')
+- Histogram:    fig = px.histogram(df, x='col', title='...', marginal='box')
+- Scatter:      fig = px.scatter(df, x='c1', y='c2', color='c3', title='...', hover_data=[...])
+- Line:         fig = px.line(df, x='c1', y='c2', title='...')
+- Box:          fig = px.box(df, y='col', title='...')  or  px.box(df, x='group', y='val')
+- Violin:       fig = px.violin(df, y='col', title='...')
+- Heatmap:      fig = px.imshow(corr_matrix, text_auto='.2f', color_continuous_scale='RdYlBu_r', title='...')
+- Pie:          Group >5 categories into "Other" first. fig = px.pie(pie_df, names='cat', values='count', hole=0.3, title='...')
+- Scatter matrix: fig = px.scatter_matrix(df, dimensions=[...], title='...')
+- Treemap:      fig = px.treemap(df, path=['col1','col2'], values='val', title='...')
+- Sunburst:     fig = px.sunburst(df, path=['col1','col2'], values='val', title='...')
+- Parallel coords: fig = px.parallel_coordinates(df, dimensions=[...], color='target')
+- 3D scatter:   fig = px.scatter_3d(df, x='c1', y='c2', z='c3', color='c4', title='...')
+- Subplots:     Use make_subplots(rows=r, cols=c) then fig.add_trace(...)
+- Feature imp:  fig = px.bar(imp_df.sort_values('imp'), x='imp', y='feat', orientation='h', title='...')
+- Confusion matrix: fig = ff.create_annotated_heatmap(z=cm, x=labels, y=labels, colorscale='Oranges')
+- ROC curve:    fig = px.line(roc_df, x='fpr', y='tpr', title=f'ROC (AUC={{auc:.3f}})')
+- Missing vals: fig = px.imshow(df.isnull().astype(int), title='Missing Values', color_continuous_scale=['white','#FF6B35'])
+
+PIE CHART: if >5 categories, group smallest into "Other":
+  counts = df['col'].value_counts()
+  if len(counts) > 5:
+      top5 = counts.head(5)
+      counts = pd.concat([top5, pd.Series({{'Other': counts.iloc[5:].sum()}})])
+  pie_df = counts.reset_index(); pie_df.columns = ['category', 'count']
+  fig = px.pie(pie_df, names='category', values='count', hole=0.3, title='...')
+  fig.update_traces(textposition='inside', textinfo='label+percent')
+
+Fallback: matplotlib only for missingno (msno) or sklearn ConfusionMatrixDisplay.
+If using matplotlib: plt.tight_layout() before plt.show().
+
+═══ ERROR HANDLING IN CODE ═══
+- Wrap sklearn imports in try/except — if not installed, tell user
+- Always handle empty DataFrames: check if df.empty or len(df) == 0
+- For groupby: use dropna=False to include null groups when relevant
+- For to_numeric/to_datetime: always use errors='coerce'
 
 {data_context}
 """
@@ -286,7 +327,12 @@ def run_datascience_agent(
     # ── Step 1: LLM generates answer / code ──────────────────────────────────
     log.info("  [3/5] calling LLM (step-1: generate answer/code) …")
     t_llm1 = time.perf_counter()
-    llm_step1 = get_llm(temperature=0.0, max_tokens=1024)
+    _COMPLEX_KEYWORDS = {"train", "model", "predict", "eda", "profile", "explore",
+                         "pipeline", "feature engineering", "hypothesis", "test",
+                         "compare models", "cross validation", "confusion matrix"}
+    is_complex = any(kw in message.lower() for kw in _COMPLEX_KEYWORDS)
+    step1_tokens = 2048 if is_complex else 1024
+    llm_step1 = get_llm(temperature=0.0, max_tokens=step1_tokens)
     msgs = (
         [SystemMessage(content=system_prompt)]
         + history_msgs
@@ -333,6 +379,37 @@ def run_datascience_agent(
                 stdout[:200],
             )
         all_code = (all_code + "\n" + block).strip()
+
+    # ── Auto-retry on sandbox error ────────────────────────────────────────
+    if code_outputs and code_outputs[-1].startswith("Code execution error") and code_blocks:
+        log.info("  [4.5/5] sandbox error detected — asking LLM to fix …")
+        error_msg = code_outputs[-1]
+        fix_prompt = (
+            f"The code you generated produced this error:\n{error_msg}\n\n"
+            f"Fix the code and try again. Write ONE corrected Python code block. "
+            f"Remember: df is already loaded, do NOT re-import data."
+        )
+        retry_msgs = msgs + [
+            AIMessage(content=step1_reply),
+            HumanMessage(content=fix_prompt),
+        ]
+        llm_retry = get_llm(temperature=0.0, max_tokens=1024)
+        retry_reply = llm_retry.invoke(retry_msgs).content
+        retry_blocks = extract_code_blocks(retry_reply)
+
+        if retry_blocks:
+            block = retry_blocks[0]
+            stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(block, df, extra_dfs)
+            if not stdout.startswith("Code execution error"):
+                code_outputs[-1] = stdout
+                if result_df is not None: result_dfs.append(result_df)
+                if chart_b64 is not None: chart_images.append(chart_b64)
+                if chart_json is not None: chart_jsons.append(chart_json)
+                if sandbox_df is not None: sandbox_dfs.append(sandbox_df)
+                all_code = block
+                log.info("  [4.5/5] retry succeeded")
+            else:
+                log.error("  [4.5/5] retry also failed: %s", stdout[:200])
 
     artifacts: dict[str, Any] = {}
     if all_code:
