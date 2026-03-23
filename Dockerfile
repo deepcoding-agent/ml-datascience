@@ -8,11 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies (cached layer)
-COPY requirements.txt setup.py MANIFEST.in ./
-COPY ai_data_science_team/ ./ai_data_science_team/
+COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -e .
+    && pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8000
 

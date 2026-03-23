@@ -19,8 +19,6 @@ source .venv/bin/activate
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
 
-# ── Ensure the ai_data_science_team package is installed in editable mode ──
-pip install --quiet -e .
 
 # ── Env vars ──────────────────────────────────────────────────────────────
 if [ -f "api/.env" ]; then
