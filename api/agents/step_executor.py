@@ -75,6 +75,13 @@ HANDLER_KEYWORD_MAP: dict[str, tuple[str, str]] = {
     "aggregate": ("transform", "groupby_agg"),
     "assign": ("transform", "assign_value"),
     "set all": ("transform", "assign_value"),
+    "set to": ("transform", "assign_value"),
+    "change": ("transform", "assign_value"),
+    "change to": ("transform", "assign_value"),
+    "change all": ("transform", "assign_value"),
+    "replace all": ("transform", "assign_value"),
+    "replace_values": ("transform", "assign_value"),
+    "replace values": ("transform", "assign_value"),
     "encode": ("transform", "encode_label"),
     "label encode": ("transform", "encode_label"),
     "one hot": ("transform", "encode_onehot"),
@@ -223,6 +230,13 @@ def _extract_handler_params(
 
     if sub == "sort":
         params["ascending"] = "desc" not in desc.lower()
+
+    if sub == "assign_value" and "value" not in params:
+        # Extract value from patterns like "to 111", "with 111", "= 111"
+        val_match = re.search(r"(?:to|with|=)\s*(-?\d+(?:\.\d+)?)", desc)
+        if val_match:
+            val_str = val_match.group(1)
+            params["value"] = int(val_str) if "." not in val_str else float(val_str)
 
     return params
 
