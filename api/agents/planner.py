@@ -76,6 +76,18 @@ HANDLER_CATALOG = """\
 | transform.sample_rows | random sample of rows | n? |
 | transform.head | first N rows | n? |
 | transform.tail | last N rows | n? |
+| transform.pivot | pivot table (reshape) | index/column, columns?, values?, agg? (mean/sum/count) |
+| transform.melt | unpivot wide→long format | id_vars?, value_vars? |
+| transform.scale_robust | RobustScaler (outlier-resistant) | (none) |
+| transform.nlargest | top N rows by column value | column?, n? |
+| transform.nsmallest | bottom N rows by column value | column?, n? |
+| transform.rank | rank values in a column | column?, ascending? |
+| transform.cumulative | cumulative sum/count/max/min | column?, agg? (sum/max/min/count) |
+| transform.rolling | moving average/sum/std | column?, window? (default 3), agg? (mean/sum/std) |
+| transform.round_values | round numeric columns | column?, decimals? (default 2) |
+| transform.split_column | split column by delimiter | column, delimiter? |
+| transform.concat_columns | concatenate columns into one | columns, separator?, new_name? |
+| transform.qcut | quantile-based binning (equal frequency) | column, n? (default 4) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
