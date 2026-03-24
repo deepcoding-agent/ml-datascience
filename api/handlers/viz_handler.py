@@ -28,10 +28,18 @@ class VizHandler(BaseHandler):
 
     @staticmethod
     def handle_bar_chart(df: pd.DataFrame, params: dict) -> HandlerResult:
-        col = params.get("column") or df.select_dtypes(include=["object", "category"]).columns[0] if len(df.select_dtypes(include=["object", "category"]).columns) > 0 else df.columns[0]
+        cats = df.select_dtypes(include=["object", "category"]).columns
+        col = params.get("column") or (cats[0] if len(cats) > 0 else df.columns[0])
+        show_pct = params.get("percentage", False)
         vc = df[col].value_counts().head(15).reset_index()
         vc.columns = [col, "count"]
-        fig = px.bar(vc, x=col, y="count", title=f"Bar Chart: {col}")
+        if show_pct:
+            vc["pct"] = (vc["count"] / len(df) * 100).round(1)
+            fig = px.bar(vc, x=col, y="pct", title=f"{col} Distribution (%)",
+                         labels={"pct": "Percentage (%)"}, text="pct")
+            fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        else:
+            fig = px.bar(vc, x=col, y="count", title=f"Bar Chart: {col}")
         return HandlerResult(success=True, charts_plotly=[fig.to_json()], summary=f"Bar chart of '{col}'")
 
     @staticmethod
@@ -95,9 +103,13 @@ class VizHandler(BaseHandler):
         cats = df.select_dtypes(include=["object", "category"]).columns
         col = col if col and col in df.columns else (cats[0] if len(cats) > 0 else df.columns[0])
         pie_df = _group_pie(df, col)
-        fig = px.pie(pie_df, names="category", values="count", title=f"Distribution: {col}", hole=0.3)
-        fig.update_traces(textposition="inside", textinfo="label+percent")
-        return HandlerResult(success=True, charts_plotly=[fig.to_json()], summary=f"Pie chart of '{col}'")
+        pie_df["percentage"] = (pie_df["count"] / pie_df["count"].sum() * 100).round(1)
+        fig = px.pie(pie_df, names="category", values="count",
+                     title=f"Distribution of {col} (%)", hole=0.3,
+                     hover_data={"percentage": True})
+        fig.update_traces(textposition="inside", textinfo="percent+label")
+        fig.update_layout(uniformtext_minsize=11, uniformtext_mode="hide")
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()], summary=f"Pie chart of '{col}' with percentages")
 
     @staticmethod
     def handle_pairplot(df: pd.DataFrame, params: dict) -> HandlerResult:

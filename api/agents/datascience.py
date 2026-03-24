@@ -32,6 +32,43 @@ from api.sandbox import run_code
 
 log = get_logger(__name__)
 
+# ── Explicit chart type detection ─────────────────────────────────────────────
+
+EXPLICIT_CHART_MAP: dict[str, str] = {
+    "pie": "pie", "piechart": "pie", "piechart": "pie",
+    "ส่วนแบ่ง": "pie", "สัดส่วน": "pie", "วงกลม": "pie",
+    "bar": "bar", "barchart": "bar", "แท่ง": "bar",
+    "histogram": "histogram", "hist": "histogram",
+    "การกระจาย": "histogram", "distribution": "histogram",
+    "line": "line", "linechart": "line", "เส้น": "line",
+    "trend": "line", "แนวโน้ม": "line",
+    "scatter": "scatter", "scatterplot": "scatter", "จุด": "scatter",
+    "box": "box", "boxplot": "box", "กล่อง": "box",
+    "heatmap": "heatmap", "ความร้อน": "heatmap",
+    "violin": "violin",
+}
+
+_PERCENT_KEYWORDS = frozenset({
+    "percent", "percentage", "%", "proportion", "ratio",
+    "เปอร์เซ็นต์", "สัดส่วน", "ร้อยละ",
+})
+
+
+def detect_explicit_chart_type(message: str) -> str | None:
+    """Check if the user explicitly named a chart type. Returns type or None."""
+    msg = message.lower().replace(" ", "")
+    for keyword, chart_type in EXPLICIT_CHART_MAP.items():
+        if keyword.replace(" ", "") in msg:
+            return chart_type
+    return None
+
+
+def wants_percentage(message: str) -> bool:
+    """Check if the user wants percentage/proportion values."""
+    msg = message.lower()
+    return any(kw in msg for kw in _PERCENT_KEYWORDS)
+
+
 # ── System prompts ────────────────────────────────────────────────────────────
 
 DS_SYSTEM_CODEGEN = """\
@@ -197,12 +234,23 @@ def run_datascience_agent(
                 target_col = match
                 break
         if target_col:
-            chart_type = select_chart_type(df, target_col)
-            log.info("  viz: col='%s' chart='%s'", target_col, chart_type)
+            # Explicit chart type from user message wins over auto-detection
+            explicit = detect_explicit_chart_type(translated_msg)
+            chart_type = explicit or select_chart_type(df, target_col)
+            show_pct = wants_percentage(translated_msg)
+            log.info("  viz: col='%s' chart='%s' explicit=%s pct=%s", target_col, chart_type, explicit, show_pct)
             from api.handlers.viz_handler import VizHandler
-            viz_params = {"column": target_col}
-            viz_map = {"bar": VizHandler.handle_bar_chart, "histogram": VizHandler.handle_histogram,
-                       "line": VizHandler.handle_line_chart}
+            viz_params = {"column": target_col, "percentage": show_pct}
+            viz_map = {
+                "bar": VizHandler.handle_bar_chart,
+                "histogram": VizHandler.handle_histogram,
+                "line": VizHandler.handle_line_chart,
+                "pie": VizHandler.handle_pie_chart,
+                "scatter": VizHandler.handle_scatter,
+                "box": VizHandler.handle_box_plot,
+                "heatmap": VizHandler.handle_heatmap,
+                "violin": VizHandler.handle_violin_plot,
+            }
             handler_fn = viz_map.get(chart_type, VizHandler.handle_bar_chart)
             result = handler_fn(df, viz_params)
             if result:
