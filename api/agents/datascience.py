@@ -132,13 +132,19 @@ RULES:
 - For modify: result = df.copy() → modify → print(result.shape)
 - For charts: fig = px.chart_type(...) — captured automatically. Never fig.show().
   Available: px, go, make_subplots, ff, sns, msno.
+- PLOTLY TYPE SAFETY: Always convert Interval/Category/mixed types to str before
+  passing to px.bar/px.pie x or names. Use [str(x) for x in values] or .astype(str).
+  Never mix float and str in the same axis — numpy will raise DType error.
 - NULL INJECTION: "inject null"/"add null"/"แทรก null" → df_new = df.copy(),
   randomly set X% to NaN. result = df_new. output_type = "generate".
 - BIN / SPLIT / LEVEL: When user says "split into N levels/bins/groups/range/tier":
   Use pd.cut(df['col'], bins=N) NOT value_counts().
-  Show actual range in labels. Sort by range order.
-  Example: bins = pd.cut(df['SalePrice'], bins=5); counts = bins.value_counts().sort_index()
-  fig = px.bar(x=[str(i) for i in counts.index], y=counts.values, title='Price by Level')
+  ALWAYS convert bin labels to str before passing to Plotly (avoids numpy dtype errors).
+  Example:
+  bins = pd.cut(df['SalePrice'], bins=5)
+  counts = bins.value_counts().sort_index()
+  labels = [str(x) for x in counts.index]  # MUST convert to str
+  fig = px.bar(x=labels, y=counts.values.tolist(), title='Price by Level')
 - MULTI-STEP: If request has "and visualization", "then plot", etc., do ALL steps:
   first transform/compute, then visualize the result. Never skip the viz step.
 
