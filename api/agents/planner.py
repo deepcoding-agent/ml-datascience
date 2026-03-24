@@ -20,7 +20,7 @@ HANDLER_CATALOG = """\
 | id | what it does | params |
 |----|-------------|--------|
 | stats.shape | row/column count, memory, duplicates | (none) |
-| stats.describe | descriptive statistics (mean, std, quartiles) | column? |
+| stats.describe | full profile: dtype, nulls, mean/std/min/quartiles/max for numeric, top/freq for categorical | column? |
 | stats.null_report | null counts + percentages per column | (none) |
 | stats.dtypes | column data types, null%, unique counts | (none) |
 | stats.value_counts | top value frequencies for one column | column?, n? |
@@ -117,8 +117,8 @@ Use codegen ONLY when NO handler in the table above can do it:
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Keep plans SHORT: 1 step if possible, 2-3 for multi-part, max 5 steps.
 3. Each step has EITHER "handler" OR "codegen" — never both.
-4. For "tell me about the dataset" / "overview" / "info" → stats.describe
-5. For "show nulls" / "missing values" → stats.null_report
+4. For "tell me about the dataset" / "overview" / "info" / "describe" / "summary" → stats.describe
+5. For "show nulls" / "missing values" / "how many nulls" → stats.null_report
 6. For "fill nulls" / "fill missing" → clean.fill_nulls (NOT stats.null_report)
 7. For "inject/create/generate nulls" → transform.inject_null
 8. For any chart request → use the matching viz handler
