@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.express as px
 
 from api.handlers.base import BaseHandler, HandlerResult
+from api.handlers.viz_handler import _style
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -32,7 +33,9 @@ class FeatureHandler(BaseHandler):
             model.fit(X, y)
             imp = pd.DataFrame({"feature": X.columns, "importance": model.feature_importances_})
             imp = imp.sort_values("importance", ascending=True)
-            fig = px.bar(imp, x="importance", y="feature", orientation="h", title="Feature Importance")
+            fig = px.bar(imp, x="importance", y="feature", orientation="h")
+            fig.update_traces(marker_color="#FB8C3C")
+            _style(fig, title="Feature Importance")
             return HandlerResult(success=True, result_df=imp, charts_plotly=[fig.to_json()],
                                  summary=f"Feature importance (target='{target}', model=RandomForest)")
         except Exception as e:
@@ -52,8 +55,8 @@ class FeatureHandler(BaseHandler):
             col_names = [f"PC{i+1}" for i in range(components.shape[1])]
             result = pd.DataFrame(components, columns=col_names, index=X.index)
             var_explained = pca.explained_variance_ratio_
-            fig = px.scatter(result, x="PC1", y="PC2",
-                             title=f"PCA (PC1={var_explained[0]:.1%}, PC2={var_explained[1]:.1%})")
+            fig = px.scatter(result, x="PC1", y="PC2", opacity=0.7)
+            _style(fig, title=f"PCA (PC1={var_explained[0]:.1%}, PC2={var_explained[1]:.1%})")
             return HandlerResult(success=True, result_df=result, charts_plotly=[fig.to_json()],
                                  output_type="generate",
                                  summary=f"PCA: {len(num_cols)} features → {n_components} components, {sum(var_explained):.1%} variance")

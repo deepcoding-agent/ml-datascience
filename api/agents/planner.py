@@ -40,6 +40,7 @@ HANDLER_CATALOG = """\
 | clean.rename_column | rename a column | column (old), new_name |
 | clean.strip_whitespace | trim whitespace from strings | (none) |
 | clean.drop_nulls | drop rows/cols with nulls | column?, threshold? |
+| clean.replace_values | replace specific values | column?, old_value, new_value |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
@@ -48,10 +49,12 @@ HANDLER_CATALOG = """\
 | transform.sort | sort by column | column, ascending? (default true) |
 | transform.groupby_agg | group + aggregate | column, agg (count/sum/mean/max/min) |
 | transform.assign_value | set ALL values in a column to a constant | column, value |
+| transform.add_column | add new column via expression | column (name), expression |
 | transform.encode_label | label-encode categoricals | column? |
 | transform.encode_onehot | one-hot encode | column? |
 | transform.scale_standard | z-score standardization | (none) |
 | transform.scale_minmax | normalize to [0,1] | (none) |
+| transform.bin_column | bin numeric column into N bins | column, n? (default 5) |
 | transform.inject_null | inject random NaN values | value (number = percentage, e.g. 15 = 15%) |
 | transform.sample_rows | random sample of rows | n? |
 | transform.head | first N rows | n? |
@@ -71,14 +74,19 @@ HANDLER_CATALOG = """\
 | viz.pairplot | scatter matrix | (none) |
 | viz.count_plot | count/frequency bar | column? |
 | viz.distribution | distribution + marginal box | column? |
+| viz.missing_heatmap | missing values pattern | (none) |
+| viz.treemap | treemap of categorical column | column? |
+| viz.bubble_chart | bubble chart (3 numeric cols) | (none) |
 
 ### Feature Engineering
 | id | what it does | params |
 |----|-------------|--------|
-| feature.feature_importance | feature importance ranking | (none) |
-| feature.pca | principal component analysis | (none) |
-| feature.log_transform | log transform numeric cols | (none) |
-| feature.correlation_filter | filter highly correlated features | (none) |
+| feature.feature_importance | feature importance ranking | column? (target) |
+| feature.pca | principal component analysis | n? (components) |
+| feature.log_transform | log transform skewed numeric cols | column? |
+| feature.correlation_filter | drop highly correlated features | value? (threshold, default 0.95) |
+| feature.variance_filter | drop low-variance features | value? (threshold, default 0.01) |
+| feature.polynomial_features | add interaction features | columns? |
 """
 
 PLANNER_PROMPT = """\

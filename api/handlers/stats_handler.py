@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.express as px
 
 from api.handlers.base import BaseHandler, HandlerResult
+from api.handlers.viz_handler import _style
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -145,7 +146,8 @@ class StatsHandler(BaseHandler):
             return HandlerResult(success=False, error="Need at least 2 numeric columns for correlation")
         corr = df[num_cols].corr().round(4)
         fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdYlBu_r",
-                        title="Correlation Matrix")
+                        aspect="auto")
+        _style(fig, title="Correlation Matrix")
         return HandlerResult(
             success=True, result_df=corr.reset_index(),
             charts_plotly=[fig.to_json()],
