@@ -20,6 +20,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.chat import router as chat_router
+from api.routes.eda_report import router as eda_router
+from api.routes.models import router as models_router
 from api.routes.prepare import router as prepare_router
 from api.routes.suggest_target import router as suggest_router
 
@@ -33,8 +35,16 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(eda_router)
+app.include_router(models_router)
 app.include_router(prepare_router)
 app.include_router(suggest_router)
+
+# Debug routes — only in dev
+import os
+if os.environ.get("LOG_LEVEL", "info").lower() == "debug":
+    from api.routes.handlers_debug import router as debug_router
+    app.include_router(debug_router)
 
 
 @app.get("/health")

@@ -1,23 +1,24 @@
-# ml-datascience — DS-Agent FastAPI Backend
+# ml-datascience — PrepPilot FastAPI Backend
 
-FastAPI service that powers the PrepPilot chat interface. Receives messages and dataset payloads from the web app, runs a multi-step LLM pipeline, executes generated Python code in a sandboxed environment, and returns text answers, charts, result datasets, and ML preparation reports.
+FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 101 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
 
 ---
 
 ## Table of Contents
 
 1. [Architecture](#1-architecture)
-2. [Project Structure](#2-project-structure)
-3. [Setup](#3-setup)
-4. [Running the Server](#4-running-the-server)
-5. [API Reference](#5-api-reference)
-6. [Agent Logic](#6-agent-logic)
-7. [Data Preparation Pipeline](#7-data-preparation-pipeline)
-8. [Code Execution Sandbox](#8-code-execution-sandbox)
-9. [Artifacts](#9-artifacts)
-10. [Logging](#10-logging)
-11. [Configuration](#11-configuration)
-12. [Dependencies](#12-dependencies)
+2. [AI-First Agent System](#2-ai-first-agent-system)
+3. [Project Structure](#3-project-structure)
+4. [Setup](#4-setup)
+5. [Running the Server](#5-running-the-server)
+6. [API Reference](#6-api-reference)
+7. [Handler Registry](#7-handler-registry) · [Full Reference →](docs/handler-feature.md)
+8. [Data Preparation Pipeline](#8-data-preparation-pipeline)
+9. [Code Execution Sandbox](#9-code-execution-sandbox)
+10. [Thai Language Support](#10-thai-language-support)
+11. [Logging](#11-logging)
+12. [Configuration](#12-configuration)
+13. [Dependencies](#13-dependencies)
 
 ---
 
@@ -26,28 +27,47 @@ FastAPI service that powers the PrepPilot chat interface. Receives messages and 
 ```
 Web App (Next.js :3000)
         │
-        │  POST /chat        →  DS-Agent or Coding Agent
-        │  POST /prepare     →  Data Preparation Pipeline
-        │  POST /suggest-target → LLM target column suggester
-        │  GET  /health      →  {"status": "ok"}
+        │  POST /chat           →  DS-Agent (AI planner) or Coding Agent
+        │  POST /prepare        →  Data Preparation Pipeline (with PrepConfig)
+        │  POST /eda-report     →  Structured EDA with auto-charts
+        │  POST /suggest-target →  LLM target column suggester
+        │  GET  /models         →  Available LLM models list
+        │  GET  /health         →  {"status": "ok"}
         ▼
 DS-Agent API (FastAPI :8000)
         │
-        ├── api/main.py          Entry point — registers routers, CORS, loads .env
-        ├── api/models.py        Pydantic request/response models
-        ├── api/llm.py           Cached ChatOpenAI factory (lru_cache)
-        ├── api/context.py       Dataset → LLM context string builder
-        ├── api/sandbox.py       Python exec() sandbox (stdout + chart capture)
-        ├── api/logger.py        Centralized structured logger → stderr
-        │
-        ├── api/routes/
-        │   ├── chat.py          POST /chat
-        │   ├── prepare.py       POST /prepare
-        │   └── suggest_target.py POST /suggest-target
+        ├── api/main.py              Entry point — registers routers, CORS, loads .env
+        ├── api/models.py            Pydantic v2 request/response models
+        ├── api/llm.py               Multi-provider LLM factory (OpenAI + Anthropic, lru_cache)
+        ├── api/context.py           Dataset → rich LLM context string builder
+        ├── api/sandbox.py           Python exec() sandbox (stdout + Plotly/matplotlib capture)
+        ├── api/logger.py            Centralized structured logger → stderr
         │
         ├── api/agents/
-        │   ├── datascience.py   DS-Agent: 2-step LLM + sandbox pipeline
-        │   └── coding.py        Coding agent: general Q&A (no dataset)
+        │   ├── datascience.py       DS-Agent orchestrator: plan → execute → interpret (AI-first)
+        │   ├── planner.py           AI planner: user message + dataset → JSON plan of steps
+        │   ├── step_executor.py     Step executor: handler resolution or codegen fallback
+        │   ├── code_generator.py    LLM-powered Python code generation for custom steps
+        │   ├── result_interpreter.py LLM result interpreter (codegen results only)
+        │   ├── context_analyzer.py  DataContext builder (nulls, skew, cardinality, warnings)
+        │   └── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
+        │
+        ├── api/handlers/
+        │   ├── __init__.py          101-entry HANDLER_REGISTRY
+        │   ├── base.py              HandlerResult dataclass, BaseHandler utilities, Thai keywords
+        │   ├── stats_handler.py     18 stats functions (describe, correlation, normality_test, etc.)
+        │   ├── clean_handler.py     20 cleaning functions (fill nulls, clip outliers, map values, etc.)
+        │   ├── transform_handler.py 26 transform functions (filter, pivot, melt, rolling, etc.)
+        │   ├── viz_handler.py       22 Plotly chart types (bar, scatter, qq_plot, density, etc.)
+        │   └── feature_handler.py   15 feature engineering functions (PCA, mutual_info, etc.)
+        │
+        ├── api/routes/
+        │   ├── chat.py              POST /chat — routes to DS-Agent or Coding Agent
+        │   ├── prepare.py           POST /prepare — 10-step prep pipeline with PrepConfig
+        │   ├── eda_report.py        POST /eda-report — structured EDA + auto-charts
+        │   ├── suggest_target.py    POST /suggest-target
+        │   ├── models.py            GET /models — available model list with provider detection
+        │   └── handlers_debug.py    GET /debug/handlers (dev only, LOG_LEVEL=debug)
         │
         └── api/data_preparation_agent.py  Full ML data prep pipeline
 ```
@@ -59,57 +79,121 @@ POST /chat
  │
  ├── datasets attached?
  │     YES → run_datascience_agent()
- │            ├── Build data context (dtypes, head, stats, value counts)
- │            ├── LLM Step 1 — GPT generates answer or Python code
- │            ├── Sandbox — exec() each code block; capture stdout, charts, DataFrames
- │            ├── LLM Step 2 — GPT interprets real execution output
- │            └── Classify intent → assemble artifacts
+ │            │
+ │            ├── Translate Thai keywords → English
+ │            ├── Analyze dataset context (nulls, skew, cardinality, warnings)
+ │            ├── Check for greeting (trivial shortcut, no AI needed)
+ │            │
+ │            ├── AI PLANNER (sole decision-maker)
+ │            │     ↓ LLM sees full handler catalog (101 handlers with IDs + params)
+ │            │     ↓ Outputs JSON plan: each step has handler:{id, params} OR codegen:{task}
+ │            │     ↓ No hardcoded keywords, no regex — AI decides everything
+ │            │
+ │            ├── STEP EXECUTOR (for each step in the plan):
+ │            │     ├── handler.id specified → resolve from HANDLER_REGISTRY → execute
+ │            │     │     └── Handler fails → silent codegen fallback
+ │            │     └── codegen specified → LLM generates Python → sandbox exec
+ │            │           └── Auto-retry on error (send error back to LLM once)
+ │            │
+ │            ├── RESPONSE BUILDER
+ │            │     ├── All steps used handlers → return handler summaries directly (no LLM)
+ │            │     └── Codegen involved → LLM interpreter explains results with real data
+ │            │
+ │            └── Smart output routing: query vs generate classification
  │
  └── NO datasets → run_coding_agent()
-                   └── GPT general Q&A (temperature 0.3)
+                   └── LLM general Q&A (temperature 0.3)
 ```
 
 ---
 
-## 2. Project Structure
+## 2. AI-First Agent System
+
+The DS-Agent uses a fully AI-driven architecture where the **LLM planner is the sole decision-maker**. No hardcoded keywords, no regex patterns, no intent classifiers.
+
+### AI Planner
+
+The planner receives the user message, dataset context, and a **complete handler catalog** (all 101 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
+
+- **`handler`** — `{id: "category.sub", params: {...}}` → instant execution via pre-built handler
+- **`codegen`** — `{task: "description", produces: "dataframe|chart|text"}` → LLM generates Python code
+
+The planner decides output_type (`query` vs `generate`) and handles disambiguation (e.g., "show nulls" → `stats.null_report` vs "fill nulls" → `clean.fill_nulls`).
+
+### Step Executor
+
+Follows the planner's decisions exactly:
+1. **Handler route** — resolves `handler.id` from registry, executes with smart column matching (fuzzy match for user-specified column names)
+2. **Codegen route** — LLM generates Python, executed in sandbox with auto-retry on failure
+3. **Silent fallback** — if a handler fails or isn't found, automatically falls back to codegen (user never sees errors)
+
+### Response Builder
+
+- **Handler-only results** → uses handler summaries directly (no extra LLM call, fastest path)
+- **Codegen or mixed results** → LLM interpreter generates a human-readable explanation using actual computed data (never placeholders)
+
+### Smart Output Routing
+
+Every response is classified by the planner as:
+- **`query`** — show inline in chat only, never save as dataset (stats, charts, questions)
+- **`generate`** — save as new dataset, add tab to DatasetPicker (cleaning, transforms, data generation)
+
+---
+
+## 3. Project Structure
 
 ```
 ml-datascience/
 ├── api/
-│   ├── .env                      ← your secrets (git-ignored)
-│   ├── .env.example              ← template
-│   ├── main.py                   ← FastAPI app entry point
-│   ├── models.py                 ← Pydantic models
-│   ├── llm.py                    ← LLM factory (cached)
-│   ├── context.py                ← dataset context builder
-│   ├── sandbox.py                ← code execution sandbox
-│   ├── logger.py                 ← centralized logger
-│   ├── data_preparation_agent.py ← ML data prep pipeline
+│   ├── .env                          ← your secrets (git-ignored)
+│   ├── .env.example                  ← template
+│   ├── main.py                       ← FastAPI app entry point
+│   ├── models.py                     ← Pydantic v2 models
+│   ├── llm.py                        ← Multi-provider LLM factory (OpenAI + Anthropic)
+│   ├── context.py                    ← Dataset context builder
+│   ├── sandbox.py                    ← Code execution sandbox (Plotly + matplotlib)
+│   ├── logger.py                     ← Centralized logger
+│   ├── data_preparation_agent.py     ← ML data prep pipeline
+│   │
 │   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── datascience.py        ← data-science agent
-│   │   └── coding.py             ← coding Q&A agent
+│   │   ├── datascience.py            ← DS-Agent orchestrator (AI-first, no keyword routing)
+│   │   ├── planner.py                ← AI planner: handler catalog + JSON plan output
+│   │   ├── step_executor.py          ← Step executor: handler resolution + codegen fallback
+│   │   ├── code_generator.py         ← LLM code generation with templates
+│   │   ├── result_interpreter.py     ← LLM result interpreter (codegen results only)
+│   │   ├── context_analyzer.py       ← DataContext analysis (nulls, skew, cardinality)
+│   │   └── coding.py                 ← Coding Q&A agent
+│   │
+│   ├── handlers/
+│   │   ├── __init__.py               ← HANDLER_REGISTRY (55 entries)
+│   │   ├── base.py                   ← HandlerResult, BaseHandler, Thai keywords
+│   │   ├── stats_handler.py          ← 18 stats functions
+│   │   ├── clean_handler.py          ← 20 cleaning functions
+│   │   ├── transform_handler.py      ← 26 transform functions
+│   │   ├── viz_handler.py            ← 22 Plotly chart types
+│   │   └── feature_handler.py        ← 15 feature engineering functions
+│   │
 │   └── routes/
-│       ├── __init__.py
-│       ├── chat.py               ← POST /chat
-│       ├── prepare.py            ← POST /prepare
-│       └── suggest_target.py     ← POST /suggest-target
-├── ai_data_science_team/         ← local LangChain agent library
-├── apps/                         ← standalone Streamlit demo apps
-├── data/                         ← sample datasets
+│       ├── chat.py                   ← POST /chat
+│       ├── prepare.py                ← POST /prepare
+│       ├── eda_report.py             ← POST /eda-report
+│       ├── suggest_target.py         ← POST /suggest-target
+│       ├── models.py                 ← GET /models
+│       └── handlers_debug.py         ← GET /debug/handlers (dev only)
+│
 ├── requirements.txt
-├── setup.py
-└── start.sh                      ← foreground server launcher
+├── Dockerfile
+└── start.sh                          ← foreground server launcher
 ```
 
 ---
 
-## 3. Setup
+## 4. Setup
 
 ### Prerequisites
 
 - Python 3.10+
-- OpenAI API key
+- Anthropic API key (required) and/or OpenAI API key (optional)
 
 ### Install
 
@@ -118,7 +202,6 @@ cd ml-datascience
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ### Configure
@@ -130,22 +213,23 @@ cp api/.env.example api/.env
 Edit `api/.env`:
 
 ```env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini    # optional — default is gpt-4o-mini
-LOG_LEVEL=info              # optional — debug | info | warning | error
+ANTHROPIC_API_KEY=sk-ant-...        # required
+ANTHROPIC_MODEL=claude-sonnet-4-6   # optional — default is claude-sonnet-4-6
+OPENAI_API_KEY=sk-proj-...          # optional — enables GPT models in model switcher
+LOG_LEVEL=info                      # optional — debug | info | warning | error
 ```
 
 ---
 
-## 4. Running the Server
+## 5. Running the Server
 
-### Option A — `start.sh` (recommended, logs visible in terminal)
+### Option A — `start.sh` (recommended)
 
 ```bash
 bash start.sh
 ```
 
-This loads `api/.env`, activates `.venv`, and starts uvicorn in the foreground with `--reload`. Press **Ctrl-C** to stop.
+Loads `api/.env`, activates `.venv`, and starts uvicorn with `--reload`. Press **Ctrl-C** to stop.
 
 ### Option B — direct uvicorn
 
@@ -167,15 +251,16 @@ Starts both the ML backend and the web app together.
 ```
 GET http://localhost:8000/health     → {"status": "ok"}
 GET http://localhost:8000/docs       → Swagger UI
+GET http://localhost:8000/models     → available models list
 ```
 
 ---
 
-## 5. API Reference
+## 6. API Reference
 
 ### `POST /chat`
 
-Routes to the data-science agent (datasets present) or coding agent (no datasets).
+Routes to the DS-Agent (datasets present) or Coding Agent (no datasets).
 
 **Request:**
 
@@ -189,9 +274,10 @@ Routes to the data-science agent (datasets present) or coding agent (no datasets
     }
   ],
   "conversation_history": [
-    { "role": "user",      "content": "What columns does this dataset have?" },
+    { "role": "user", "content": "What columns does this dataset have?" },
     { "role": "assistant", "content": "The dataset has 81 columns..." }
-  ]
+  ],
+  "model_id": "claude-sonnet-4-6"
 }
 ```
 
@@ -201,21 +287,25 @@ Routes to the data-science agent (datasets present) or coding agent (no datasets
 {
   "response": "Here are the top 10 properties by sale price...",
   "artifacts": {
-    "code": "result = df.nlargest(10, 'SalePrice')\nprint(result)",
-    "code_output": "   Id  SalePrice ...",
-    "chart_image": "<base64-encoded PNG>",
+    "code": "result = df.nlargest(10, 'SalePrice')",
+    "chart_json": "<plotly-json>",
     "inline_table": [{ "Id": 1, "SalePrice": 208500 }],
     "data_wrangled": [{ "Id": 1, "SalePrice": 208500 }],
     "dataset_name": "top_10_by_sale_price",
-    "dataset_shape": { "rows": 10, "cols": 81 }
-  }
+    "dataset_shape": { "rows": 10, "cols": 81 },
+    "output_type": "query",
+    "should_activate": false
+  },
+  "model_used": "claude-sonnet-4-6"
 }
 ```
 
-**Notes:**
-- `conversation_history` — up to last 6 messages are injected for context
-- Multiple datasets can be passed; secondary datasets are available in the sandbox by their sanitized name (e.g. `sales_data.csv` → `sales_data`)
-- `datasets` empty → coding agent (no sandbox, no artifacts)
+| Field | Description |
+|---|---|
+| `model_id` | Optional. `"claude-sonnet-4-6"`, `"gpt-4o-mini"`, etc. Auto-detects provider |
+| `output_type` | `"query"` (read-only, inline) or `"generate"` (creates new dataset) |
+| `should_activate` | Whether frontend should auto-switch to the new dataset |
+| `chart_json` | Plotly JSON string (interactive chart) |
 
 ---
 
@@ -227,67 +317,62 @@ Runs the ML data preparation pipeline on a dataset.
 
 ```json
 {
-  "dataset": {
-    "name": "housing",
-    "data": [{ "Id": 1, "SalePrice": 208500, "MSZoning": "RL" }]
-  },
+  "dataset": { "name": "housing", "data": [...] },
   "target_column": "SalePrice",
-  "test_size": 0.2,
-  "scale": true,
-  "correlation_threshold": 0.95,
-  "mode": "full"
+  "mode": "full",
+  "config": {
+    "missing_strategy": "auto",
+    "scaling_method": "standard",
+    "encoding_method": "auto",
+    "outlier_treatment": "iqr",
+    "outlier_threshold": 1.5,
+    "correlation_threshold": 0.95,
+    "test_size": 0.2,
+    "drop_threshold": 0.4
+  }
 }
 ```
 
-| Field | Default | Description |
+| Config Field | Default | Description |
 |---|---|---|
-| `target_column` | `null` | Column to predict. If omitted, `/suggest-target` logic is used |
-| `test_size` | `0.2` | Fraction of data reserved for the test split |
-| `scale` | `true` | StandardScaler on numeric features |
-| `correlation_threshold` | `0.95` | Drop one column from pairs with correlation above this value |
-| `mode` | `"full"` | `"full"` — full ML prep · `"clean"` / `"cleaning"` — cleaning only |
+| `missing_strategy` | `"auto"` | `auto` \| `mean` \| `median` \| `mode` \| `drop` |
+| `scaling_method` | `"standard"` | `standard` \| `minmax` \| `robust` \| `none` |
+| `encoding_method` | `"auto"` | `auto` \| `onehot` \| `label` \| `ordinal` |
+| `outlier_treatment` | `"iqr"` | `iqr` \| `zscore` \| `none` |
+| `correlation_threshold` | `0.95` | Drop one column from highly correlated pairs |
+| `test_size` | `0.2` | Train/test split ratio |
+| `mode` | `"full"` | `"full"` — ML prep · `"clean"` — cleaning only |
 
-**Response:**
+**Response:** Returns `PrepareResponse` with report, split data, feature names, label mappings, and structured `report_detail`.
+
+---
+
+### `POST /eda-report`
+
+Structured EDA report with auto-generated charts.
+
+**Request:**
 
 ```json
 {
-  "success": true,
-  "mode": "full",
-  "report": "## Data Preparation Report\n...",
-  "steps": ["Dropped 3 unusable columns", "Filled 12 missing values", "..."],
-  "target_column": "SalePrice",
-  "target_type": "regression",
-  "feature_names": ["MSZoning", "LotArea", "..."],
-  "train_rows": 1168,
-  "test_rows": 292,
-  "n_features": 74,
-  "dropped_columns": ["Id", "Alley"],
-  "corr_dropped": ["GarageArea"],
-  "encoded_columns": ["MSZoning", "Street"],
-  "scaled_columns": ["LotArea", "GrLivArea"],
-  "label_mappings": { "MSZoning": { "RL": 0, "RM": 1 } },
-  "target_label_map": null,
-  "X_train": [{ "MSZoning": 0, "LotArea": -0.21 }],
-  "X_test":  [{ "MSZoning": 1, "LotArea":  0.45 }],
-  "y_train": [208500, 181500],
-  "y_test":  [223500]
+  "dataset": { "name": "housing", "data": [...] }
 }
 ```
+
+**Response:** `EDAResponse` with row/column counts, memory usage, column profiles (null%, unique, stats, skewness), correlation matrix, and auto-generated charts.
 
 ---
 
 ### `POST /suggest-target`
 
-Uses GPT to identify the most appropriate ML target column from a list of column names and optional sample data.
+LLM-powered target column suggestion.
 
 **Request:**
 
 ```json
 {
   "columns": ["Id", "MSZoning", "LotArea", "SalePrice"],
-  "sample_data": [
-    { "Id": 1, "MSZoning": "RL", "LotArea": 8450, "SalePrice": 208500 }
-  ]
+  "sample_data": [{ "Id": 1, "MSZoning": "RL", "LotArea": 8450, "SalePrice": 208500 }]
 }
 ```
 
@@ -296,11 +381,22 @@ Uses GPT to identify the most appropriate ML target column from a list of column
 ```json
 {
   "target_column": "SalePrice",
-  "reason": "SalePrice is a continuous numeric column representing the outcome to predict in a regression task."
+  "reason": "SalePrice is a continuous numeric column representing the outcome to predict."
 }
 ```
 
-Falls back to the last column if the LLM call fails.
+---
+
+### `GET /models`
+
+Returns available LLM models with provider detection based on configured API keys.
+
+```json
+[
+  { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "provider": "anthropic", "badge": "Smart", "available": true },
+  { "id": "gpt-4o-mini", "label": "GPT-4o Mini", "provider": "openai", "badge": "Fast", "available": false }
+]
+```
 
 ---
 
@@ -312,195 +408,137 @@ Falls back to the last column if the LLM call fails.
 
 ---
 
-### `GET /docs`
+## 7. Handler Registry
 
-Auto-generated Swagger UI. Explore and test all endpoints interactively.
+101 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
 
----
+For the complete reference with all parameters, see **[docs/handler-feature.md](docs/handler-feature.md)**.
 
-## 6. Agent Logic
+### Stats (18 handlers)
+`describe`, `shape`, `null_report`, `dtypes`, `value_counts`, `unique_values`, `correlation`, `top_correlations`, `cross_tab`, `class_balance`, `normality_test`, `skewness`, `kurtosis`, `percentile`, `outlier_report`, `duplicate_report`, `zero_report`, `cardinality_report`
 
-### Data-Science Agent (`agents/datascience.py`)
+### Clean (20 handlers)
+`fill_nulls`, `fill_with_value`, `fill_interpolate`, `drop_nulls`, `remove_duplicates`, `deduplicate_by`, `drop_constant`, `clip_outliers`, `remove_outliers`, `drop_column`, `drop_id_columns`, `rename_column`, `lowercase_columns`, `reset_index`, `fix_dtypes`, `change_dtype`, `replace_values`, `map_values`, `lowercase_values`, `strip_whitespace`
 
-**Timing:** Each step is logged with elapsed time for performance monitoring.
+### Transform (26 handlers)
+`filter`, `sort`, `nlargest`, `nsmallest`, `head`, `tail`, `sample_rows`, `pivot`, `melt`, `groupby_agg`, `rank`, `cumulative`, `rolling`, `round_values`, `add_column`, `assign_value`, `split_column`, `concat_columns`, `encode_label`, `encode_onehot`, `scale_standard`, `scale_minmax`, `scale_robust`, `bin_column`, `qcut`, `inject_null`
 
-**Step 1 — Data context injection**
+### Visualization (22 handlers)
+`bar_chart`, `stacked_bar`, `histogram`, `pie_chart`, `count_plot`, `line_chart`, `area_chart`, `scatter`, `distribution`, `density_plot`, `box_plot`, `violin_plot`, `strip_plot`, `qq_plot`, `heatmap`, `pairplot`, `parallel_coords`, `bubble_chart`, `treemap`, `sunburst`, `missing_heatmap`, `time_series`
 
-Before calling the LLM, `context.py` builds a rich string from the dataset:
-- Shape (`rows × columns`)
-- Column names and dtypes
-- First 10 rows as a markdown table
-- Descriptive statistics for all numeric columns
-- Top-5 value counts for up to 8 categorical columns
+All charts use a unified minimal Plotly theme — `plotly_white`, `#FB8C3C` accent, Inter font, transparent background.
 
-**Step 2 — LLM generates answer / code** (`temperature=0.0`)
-
-ChatOpenAI receives: system prompt with data context + last 6 chat history messages + user message.
-
-The system prompt enforces strict coding rules:
-- Always assign results to `result = df.xxx` before printing
-- Never modify `df` directly — use `result = df.copy()`
-- Use `plt.show()` for charts (captured automatically)
-- Generate colors dynamically to match the number of data points
-
-**Step 3 — Sandbox execution**
-
-All `python` fenced code blocks are extracted and executed (see §8).
-
-**Step 4 — LLM interprets results** (`temperature=0.0`)
-
-A second LLM call receives the question, the code, and the actual stdout output. Returns a structured natural language answer with a Summary section.
-
-**Step 5 — Intent classification and artifact assembly**
-
-| Intent Keywords | Artifact produced |
-|---|---|
-| `plot`, `chart`, `graph`, `histogram`, `scatter`, `bar`, `line`, `pie`, `heatmap`, `visualize`, ... | `chart_image` |
-| `generate`, `create`, `add`, `modify`, `transform`, `filter`, `clean`, `encode`, `normalize`, ... | `data_wrangled` + `dataset_name` + `dataset_shape` |
-| `show`, `display`, `view`, `head`, `tail`, `first`, `last`, `preview`, `sample`, ... | `inline_table` |
-| `how many`, `count`, `average`, `mean`, `sum`, `top`, `breakdown`, ... | `inline_table` |
-
-### Coding Agent (`agents/coding.py`)
-
-No dataset. Single ChatOpenAI call (`temperature=0.3`). Answers general coding and data science questions with explanation, code examples, and a one-sentence summary.
+### Feature Engineering (15 handlers)
+`feature_importance`, `mutual_info`, `select_k_best`, `pca`, `correlation_filter`, `variance_filter`, `log_transform`, `sqrt_transform`, `power_transform`, `target_encode`, `frequency_encode`, `cyclical_encode`, `datetime_features`, `ratio_features`, `polynomial_features`
 
 ---
 
-## 7. Data Preparation Pipeline
+## 8. Data Preparation Pipeline
 
-`api/data_preparation_agent.py` runs an LLM-guided ML pipeline with three modes:
+`api/data_preparation_agent.py` runs an LLM-guided ML pipeline:
 
-### Modes
+### Pipeline Steps (full mode)
 
-| Mode | What it does |
-|---|---|
-| `"full"` | Full ML pipeline: drop unusable columns → fill missing → encode categoricals → scale numerics → train/test split |
-| `"clean"` / `"cleaning"` | Drop unusable columns + fill missing values only (no encoding, no split) |
+1. **Drop unusable columns** — all-null, all-constant, IDs (unique ratio > 95%), free-text
+2. **Fill missing values** — numeric: median (skewed) or mean (normal); categorical: mode; extreme nulls (> drop_threshold): column dropped
+3. **Outlier treatment** — IQR or z-score clipping
+4. **Encode categoricals** — label encoding for binary/low-cardinality, one-hot for high-cardinality
+5. **Drop correlated features** — pairs exceeding `correlation_threshold`
+6. **Scale numeric features** — StandardScaler, MinMaxScaler, or RobustScaler
+7. **Train/test split** — stratified for classification, random for regression
 
-### Pipeline steps (full mode)
-
-1. **Drop unusable columns** — removes columns that are all-null, all-constant, IDs (unique ratio > 95%), or free-text (object with avg length > 50 chars)
-2. **Fill missing values** — numeric: median; categorical: mode; extreme nulls (> 50%): column dropped
-3. **Encode categoricals** — label encoding for binary/low-cardinality, one-hot for high-cardinality (up to 15 categories)
-4. **Drop correlated features** — removes one column from each pair exceeding `correlation_threshold` (default 0.95)
-5. **Scale numeric features** — `StandardScaler` if `scale=True`
-6. **Train/test split** — stratified for classification, random for regression
-
-### LLM-generated report
-
-After pipeline execution, GPT generates a Markdown report summarizing:
-- What was cleaned and why
-- Encoding and scaling decisions
-- Feature engineering choices
-- Potential data quality issues to watch for
+Returns structured `PrepReportDetail` with per-step metrics + LLM-generated markdown summary.
 
 ---
 
-## 8. Code Execution Sandbox
+## 9. Code Execution Sandbox
 
 Code runs inside Python `exec()` with a controlled namespace:
 
 ```python
 {
-    "df":  df,    # primary dataset as pandas DataFrame
-    "pd":  pd,    # pandas
-    "np":  np,    # numpy (imported once at module level)
-    "plt": plt,   # matplotlib.pyplot (plt.show patched to capture figures)
-    # ... secondary datasets by sanitized variable name
+    "df":  df,           # primary dataset as pandas DataFrame
+    "pd":  pd,           # pandas
+    "np":  np,           # numpy
+    "plt": plt,          # matplotlib.pyplot (patched to capture figures)
+    "sns": sns,          # seaborn
+    "px":  px,           # plotly.express
+    "go":  go,           # plotly.graph_objects
+    "msno": msno,        # missingno
+    "make_subplots": ..., # plotly.subplots
+    "ff":  ff,           # plotly.figure_factory
 }
 ```
 
-**Stdout capture:** `contextlib.redirect_stdout` captures all `print()` output.
-
-**Chart capture:** `plt.show` is monkey-patched before `exec()` to save each figure as a base64 PNG string instead of opening a window. Any figures still open after `exec()` are also captured. All figures are closed on exit.
-
-**Last-expression evaluation:** After `exec()`, the last non-comment line is evaluated with `eval()`. If it returns a DataFrame, Series, or scalar, its string representation is appended to stdout.
-
-**DataFrame detection:** After execution, `sandbox.py` scans the namespace for result DataFrames in this priority order:
-
-```
-result, df_result, output_df, df_out, df_new, df_filtered,
-filtered_df, transformed_df, df_clean, df_transformed
-```
-
-Then falls back to any DataFrame not present in the original input.
-
-**Transposed result rejection:** DataFrames with exactly 2 columns where row count equals the original column count are rejected (these are transposed Series, not proper tabular results).
+**Key features:**
+- **Plotly-first charts** — Plotly figures captured as JSON, with PrepPilot theme applied
+- **Thai font support** — auto-detects Tahoma/Arial Unicode MS for matplotlib
+- **PrepPilot theme** — orange accent (`#FB8C3C`), Inter/Noto Sans Thai font family
+- **Stdout capture** — `contextlib.redirect_stdout` captures all `print()` output
+- **Chart capture** — `plt.show` monkey-patched; Plotly figures deduplicated by `id()`
+- **DataFrame detection** — scans for result DataFrames in priority order (`result`, `df_result`, `output_df`, etc.)
+- **Auto-retry** — if code fails, error sent back to LLM for one fix attempt
 
 ---
 
-## 9. Artifacts
+## 10. Thai Language Support
 
-Artifacts are returned in the `artifacts` field of `ChatResponse`. The web app interprets each key differently:
+PrepPilot supports Thai language queries throughout the stack:
 
-| Key | Type | Description | Saved to DB |
-|---|---|---|---|
-| `code` | `string` | All Python code blocks that were executed | Yes |
-| `code_output` | `string` | Captured stdout from code execution | Yes |
-| `chart_image` | `string` | Base64-encoded PNG chart | Yes |
-| `inline_table` | `Record[]` | Row data for inline display (show/stats intent) | No — stripped before save |
-| `data_wrangled` | `Record[]` | Row data for a new dataset (generate intent) | Converted to dataset, then stripped |
-| `dataset_name` | `string` | LLM-generated `snake_case` name for the new dataset | Stored as dataset metadata |
-| `dataset_shape` | `object` | `{ rows: number, cols: number }` | Yes |
+- **`THAI_COLUMN_KEYWORDS`** — 30+ Thai → English keyword mappings (ห้องนอน → bedroom, ราคา → price, etc.)
+- **`translate_thai_keywords()`** — applied before planner receives the message
+- **Thai in planner** — the AI planner prompt includes Thai language examples and a rule to translate Thai intent
+- **Thai fonts** — matplotlib uses Tahoma/Arial Unicode MS; Plotly uses `"Inter, Noto Sans Thai, Tahoma"`
 
 ---
 
-## 10. Logging
+## 11. Logging
 
-All application logs are written to **stderr** so they appear alongside uvicorn's access logs in the same terminal.
+All logs written to **stderr** alongside uvicorn's access logs.
 
-Log format:
 ```
-HH:MM:SS  LEVEL     message
-```
-
-Example output during a `/chat` request:
-```
-22:14:01  INFO      ━━ DS-Agent start ━━  datasets=['housing.csv']
-22:14:01  INFO        [1/5] loaded primary 'housing.csv'  shape=(1460, 81)
-22:14:01  INFO        [2/5] building data context …
-22:14:01  INFO        [3/5] calling LLM (step-1: generate answer/code) …
-22:14:03  INFO        [3/5] LLM step-1 done  (2.1s)
-22:14:03  INFO        [4/5] executing 1 code block(s) in sandbox …
-22:14:03  INFO        sandbox block 1 done (0.04s)  result_df=(10, 81)  chart=False  output='...'
-22:14:03  INFO        [5/5] calling LLM (step-2: interpret output) …
-22:14:05  INFO        [5/5] LLM step-2 done  (1.8s)
-22:14:05  INFO        intent  viz=False  generate=False  show=True  stats=False
-22:14:05  INFO      ━━ DS-Agent done  total=4.1s ━━
+22:14:01  INFO   ━━ DS-Agent start ━━  datasets=['housing.csv']
+22:14:01  INFO     context: (1460, 81), nulls=19 cols, dupes=0
+22:14:02  INFO     Plan: Get dataset dimensions — 1 step(s), output_type=query
+22:14:02  INFO     Step 1: Get dataset shape
+22:14:02  INFO       route=handler id=stats.shape
+22:14:02  INFO   ━━ DS-Agent done  output=query  steps=1  elapsed=1.2s ━━
 ```
 
-### Log level
-
-Set `LOG_LEVEL` in `api/.env`:
-
-| Value | What you see |
+| Log Level | What you see |
 |---|---|
-| `debug` | Everything including full code blocks sent to sandbox |
-| `info` | Normal — step timings, shapes, intents (default) |
+| `debug` | Everything including full code blocks, handler params |
+| `info` | Step timings, plan details, routes used (default) |
 | `warning` | Only warnings and errors |
 | `error` | Only errors |
 
 ---
 
-## 11. Configuration
+## 12. Configuration
 
-All configuration is via `api/.env` (loaded automatically by `main.py` via `python-dotenv`):
+All configuration via `api/.env`:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `OPENAI_API_KEY` | **Yes** | — | OpenAI API key (get one at platform.openai.com) |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | Model name for all LLM calls |
-| `LOG_LEVEL` | No | `info` | Logging verbosity: `debug` / `info` / `warning` / `error` |
-| `PORT` | No | `8000` | Port for `start.sh` launcher |
-| `RELOAD` | No | `true` | Hot-reload in `start.sh` (`true` / `false`) |
+| `ANTHROPIC_API_KEY` | **Yes** | — | Anthropic API key |
+| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-6` | Default model for all LLM calls |
+| `OPENAI_API_KEY` | No | — | OpenAI API key (enables GPT models) |
+| `LOG_LEVEL` | No | `info` | `debug` / `info` / `warning` / `error` |
+| `PORT` | No | `8000` | Port for `start.sh` |
+| `RELOAD` | No | `true` | Hot-reload in `start.sh` |
 
-### LLM caching
+### LLM Factory
 
-`api/llm.py` uses `functools.lru_cache` keyed on `(api_key, model_name, temperature)`. The `ChatOpenAI` instance is constructed once and reused across all requests, avoiding repeated object construction overhead.
+`api/llm.py` supports multi-provider model selection:
+
+- **Anthropic**: `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`
+- **OpenAI**: `gpt-4o-mini`, `gpt-4o`
+
+Auto-detects provider from `model_id`. Uses `functools.lru_cache` keyed on `(provider, api_key, model, temperature, max_tokens)`.
 
 ---
 
-## 12. Dependencies
+## 13. Dependencies
 
 Key packages:
 
@@ -508,21 +546,20 @@ Key packages:
 |---|---|---|
 | `fastapi` | 0.129.0 | Web framework |
 | `uvicorn` | 0.40.0 | ASGI server |
-| `pydantic` | 2.12.5 | Request / response validation |
+| `pydantic` | 2.12.5 | Request/response validation (v2) |
 | `python-dotenv` | 1.2.1 | `.env` file loading |
 | `langchain` | 1.2.10 | LLM orchestration |
-| `langchain-openai` | 1.1.9 | ChatOpenAI integration |
+| `langchain-anthropic` | ≥0.3.0 | ChatAnthropic integration |
+| `langchain-openai` | ≥0.3.0 | ChatOpenAI integration |
 | `langchain-core` | 1.2.13 | Base message types |
-| `langgraph` | 1.0.8 | Agent graph execution |
-| `openai` | 2.21.0 | OpenAI API client |
 | `pandas` | 2.3.3 | Data manipulation |
 | `numpy` | 2.4.2 | Numerical computing |
-| `matplotlib` | 3.10.8 | Chart generation in sandbox |
+| `plotly` | 6.5.2 | Interactive charts (primary) |
+| `matplotlib` | 3.10.8 | Chart fallback (missingno/sklearn) |
+| `seaborn` | 0.13.2 | Statistical plots |
+| `missingno` | 0.5.2 | Missing data visualization |
 | `scikit-learn` | 1.8.0 | ML pipeline (encoding, scaling, splitting) |
 | `scipy` | 1.17.0 | Scientific computing |
 | `xgboost` | 3.2.0 | Gradient boosting models |
-| `mlflow` | 3.9.0 | ML experiment tracking |
-| `streamlit` | 1.54.0 | Demo app UI (apps/ only) |
-| `gunicorn` | 23.0.0 | Production WSGI server |
 
 Full list in `requirements.txt`.

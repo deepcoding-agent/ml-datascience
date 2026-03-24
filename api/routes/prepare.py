@@ -22,10 +22,8 @@ async def prepare(req: PrepareRequest) -> PrepareResponse:
         result = run_data_preparation(
             data=req.dataset.data,
             target_column=req.target_column,
-            test_size=req.test_size,
-            scale=req.scale,
-            correlation_threshold=req.correlation_threshold,
             mode=req.mode,
+            config=req.config,
         )
         if result.get("success"):
             log.info(

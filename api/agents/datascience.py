@@ -1,335 +1,206 @@
 """
-Data-science agent — handles chat messages when one or more datasets are attached.
+DS-Agent Orchestrator — AI-first routing.
 
-Flow
-----
-1. Build a rich data-context string from every attached dataset.
-2. Ask the LLM to answer or generate code  (Step 1).
-3. Execute every code block in the sandbox  (Step 2).
-4. Ask the LLM to interpret the real execution output  (Step 3).
-5. Classify the user intent and decide how to surface the result DataFrame:
-     • viz intent      → chart only, no new dataset
-     • generate intent → auto-save as new dataset (data_wrangled artifact)
-     • show / stats    → inline table
+The AI planner is the SOLE decision-maker for handler vs codegen routing.
+No hardcoded keywords, no regex patterns. The planner sees the full handler
+catalog and decides what to use for each step.
+
+Flow:
+  1. Greeting shortcut (trivial, no AI)
+  2. AI Planner → structured plan with handler.id or codegen per step
+  3. Step Executor → follows planner decisions, codegen fallback on failure
+  4. Response → handler summary (fast) or LLM interpreter (codegen results)
 """
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 import pandas as pd
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
-from api.context import data_context, extract_code_blocks, sanitize_var_name
+from api.agents.context_analyzer import analyze_context
+from api.agents.planner import plan_steps
+from api.agents.result_interpreter import interpret_final_result
+from api.agents.step_executor import execute_plan
+from api.context import data_context, sanitize_var_name
+from api.handlers.base import translate_thai_keywords
 from api.llm import build_lc_history, get_llm
 from api.logger import get_logger
 from api.models import ChatMessage, DatasetPayload
-from api.sandbox import run_code
 
 log = get_logger(__name__)
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+# ── Greetings (very short, no-task messages) ─────────────────────────────────
 
-DS_SYSTEM_STEP1 = """\
-You are an expert data scientist. The dataset is ALREADY LOADED into a pandas DataFrame called `df`.
-You can see the actual data below — use it to answer directly.
-
-IMPORTANT RULES:
-- NEVER say you don't have access to the data. You DO have it — it is shown below.
-- Answer using the real numbers from the data context provided.
-- When a computation is needed, write ONE clean Python code block.
-- In code: `df` is already available. Do NOT re-load or re-import the data.
-- Always use print() to output your results in code.
-- Do NOT explain what you would do — just do it.
-- For show/display/view/list row requests: ALWAYS assign the DataFrame slice to a variable named \
-`result` first, then print it. Example: `result = df.head(10); print(result)`. \
-Never do `print(df.head(10))` directly. NEVER use .T, .transpose(), or .iloc[0] — \
-always return a proper rows × columns DataFrame.
-- For count/aggregate/stats questions ("how many", "count", "average", "sum", "total", \
-"percentage", "top N", "distribution", "mean", "max", "min", "range", "between"): \
-ALWAYS build a proper DataFrame and assign it to `result`, then print it. \
-NEVER print a bare scalar or Series. Examples:
-    * "how many in each category" → `result = df.groupby('col').size().reset_index(name='count'); print(result)`
-    * "how many have price > X"   → `result = pd.DataFrame({{'label': ['count'], 'value': [len(df[df['price'] > X])]}}); print(result)`
-    * "average price by bedrooms" → `result = df.groupby('bedrooms')['price'].mean().reset_index(); print(result)`
-    * "top 5 by price"            → `result = df.nlargest(5, 'price'); print(result)`
-  This ensures the numbers always appear as a structured inline table.
-- For generate/modify/transform/create requests (replacing values, adding columns, filling NAs, \
-filtering, renaming, etc.): ALWAYS start with `result = df.copy()`, then apply ALL modifications \
-to `result` — NEVER modify `df` directly. At the end, print a short summary \
-(e.g. `print(result.shape)`). Example: `result = df.copy(); result['price'] = 100; print(result.shape)`.
-- For visualization requests (plot, chart, graph, histogram, scatter, bar, line, etc.):
-    - Use matplotlib.pyplot (already imported as `plt`) to create the chart.
-    - Call plt.tight_layout() BEFORE plt.show() — this prevents label/title overlap.
-    - Call plt.show() at the end — the system will capture it automatically.
-    - Use plt.figure(figsize=(10, 6)) for a good default size (taller for legends).
-    - Always add a title (plt.title) and axis labels where applicable.
-    - COLORS: NEVER hardcode a fixed-length color list. Always generate colors that match the \
-actual number of data points/categories at runtime:
-        * Scatter / line (N points): `colors = plt.cm.tab10(np.linspace(0, 1, len(data)))` \
-then pass `color=colors`
-        * Bar chart (N bars): `colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))` \
-then pass `color=colors`
-        * Single-color chart: pass a single string like `color="#FB8C3C"` — do NOT pass a list
-        * Categorical hue: use `c=pd.factorize(df['col'])[0]` with `cmap='tab10'`
-    - PIE CHARTS: NEVER use both labels= and autopct= on the wedges when there are more than \
-4 slices — they overlap. Instead:
-        * Use `labels=None` and `autopct=None` on the pie() call itself
-        * Move all labels to a legend: \
-`plt.legend(labels, loc='best', bbox_to_anchor=(1, 0.5), fontsize=9)`
-        * Show percentages inside large slices only: \
-`autopct=lambda p: f'{{p:.1f}}%' if p >= 5 else ''`
-        * Use `pctdistance=0.75` so percentage text sits cleanly inside the wedge
-    - BAR / HORIZONTAL BAR CHARTS: rotate x-axis labels when there are more than 5 categories:
-        `plt.xticks(rotation=45, ha='right', fontsize=9)`
-    - Always call `plt.tight_layout()` as the very last step before `plt.show()`.
-
-{data_context}
-"""
-
-DS_SYSTEM_STEP2 = """\
-You are a data science assistant. A user asked a question, code was executed against the dataset,
-and the output is shown below. Write a focused, well-structured answer in plain English.
-
-Guidelines:
-- Cover all key findings — do not omit important results.
-- Interpret the numbers, don't just repeat them (explain what they mean).
-- Use bullet points for multiple items; use short paragraphs for explanation.
-- Avoid padding, repetition, or over-explaining obvious things.
-- End with a **Summary** section (1–2 sentences) that captures the core answer.
-
-User question: {question}
-Code executed:
-```python
-{code}
-```
-Execution output:
-{output}
-"""
-
-# ── Intent keyword sets ───────────────────────────────────────────────────────
-
-_VIZ_KEYWORDS = {
-    "plot", "chart", "graph", "histogram", "scatter", "bar", "line",
-    "pie", "heatmap", "boxplot", "box", "violinplot", "violin",
-    "visualize", "visualise", "visualization", "visualisation",
-    "distribution", "correlation", "pairplot", "trend",
-}
-_GENERATE_KEYWORDS = {
-    "generate", "create", "make", "build", "produce", "construct",
-    "add", "insert", "put", "introduce", "inject",
-    "modify", "transform", "change", "update", "replace", "edit",
-    "augment", "simulate", "synthesize", "fabricate", "random",
-    "new", "missing", "na", "nan", "null", "duplicate", "shuffle",
-    "merge", "join", "concat", "combine", "split", "sample",
-    "encode", "normalize", "scale", "clean", "impute", "drop",
-    "rename", "reorder", "sort", "filter", "subset",
-}
-_SHOW_KEYWORDS = {
-    "show", "display", "view", "print", "head", "tail", "first", "last",
-    "list", "preview", "sample", "peek", "look", "see", "what", "rows",
-}
-_STATS_KEYWORDS = {
-    "how", "many", "count", "average", "mean", "median", "sum", "total",
-    "percentage", "percent", "top", "bottom", "highest", "lowest",
-    "between", "range", "above", "below", "over", "under", "most", "least",
-    "number", "much", "often", "frequently", "compare", "breakdown",
-    "each", "per", "group", "category", "categories",
-}
+_GREETINGS = frozenset({
+    "hi", "hello", "hey", "สวัสดี", "หวัดดี", "ดีครับ", "ดีค่ะ",
+    "yo", "sup", "hola", "good morning", "good afternoon",
+})
 
 
-def _classify_intent(words: set[str], has_charts: bool) -> tuple[bool, bool, bool, bool]:
+def _is_pure_greeting(message: str) -> bool:
+    """Only trigger greeting for very short messages with no task words."""
+    words = message.lower().strip().split()
+    return len(words) <= 3 and any(w in _GREETINGS for w in words)
+
+
+# ── Dataset name generator ───────────────────────────────────────────────────
+
+def _generate_dataset_name(message: str, model_id: str | None = None) -> str:
+    """Generate a short snake_case dataset name via LLM."""
+    try:
+        llm = get_llm(temperature=0.0, max_tokens=50, model_id=model_id)
+        reply = llm.invoke([HumanMessage(
+            content=f'Generate a short snake_case dataset name (max 5 words) for: "{message}". Reply ONLY the name.'
+        )]).content.strip().replace(" ", "_").lower()
+        return re.sub(r"[^a-z0-9_]", "", reply)[:60] or "result_dataset"
+    except Exception:
+        return "result_dataset"
+
+
+# ── Response building ────────────────────────────────────────────────────────
+
+def _build_response_text(
+    exec_result: dict,
+    plan: dict,
+    message: str,
+    model_id: str | None,
+) -> str:
+    """Build response text.
+
+    - Handler-only results → use handler summaries directly (no extra LLM call)
+    - Codegen or mixed results → LLM interpreter for richer explanation
     """
-    Return (is_viz, is_generate, is_show, is_stats) intent flags.
-    Viz is checked first and gates the others.
-    """
-    is_viz      = bool(words & _VIZ_KEYWORDS) or has_charts
-    is_generate = bool(words & _GENERATE_KEYWORDS) and not is_viz
-    is_show     = bool(words & _SHOW_KEYWORDS) and not is_generate and not is_viz
-    is_stats    = (
-        bool(words & _STATS_KEYWORDS)
-        and not is_generate and not is_viz and not is_show
-    )
-    return is_viz, is_generate, is_show, is_stats
+    stdout = exec_result.get("stdout", "")
+    step_results = exec_result.get("step_results", [])
+
+    # If all steps used handlers and there's stdout, use it directly
+    all_handler = step_results and all(s.get("used_handler") for s in step_results)
+    if all_handler and stdout:
+        return stdout
+
+    # For codegen or mixed results, use LLM interpreter
+    try:
+        interp_llm = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
+        return interpret_final_result(message, plan, exec_result, interp_llm)
+    except Exception as e:
+        log.error("Interpretation failed: %s", e)
+        return stdout or "Operation completed."
 
 
-# ── Agent ─────────────────────────────────────────────────────────────────────
+# ── Main orchestrator ────────────────────────────────────────────────────────
 
 def run_datascience_agent(
     message: str,
     datasets: list[DatasetPayload],
     history: list[ChatMessage],
+    model_id: str | None = None,
 ) -> tuple[str, dict]:
-    import time
+    """AI-first agent: planner decides everything, no hardcoded routing."""
     t0 = time.perf_counter()
     primary = datasets[0]
 
-    # ── Load DataFrames ───────────────────────────────────────────────────────
+    # Step 1: Load DataFrames
     log.info("━━ DS-Agent start ━━  datasets=%s", [d.name for d in datasets])
     df = pd.DataFrame(primary.data)
-    log.info("  [1/5] loaded primary '%s'  shape=%s", primary.name, df.shape)
-
     extra_dfs: dict[str, pd.DataFrame] = {}
     for ds in datasets[1:]:
-        var = sanitize_var_name(ds.name)
-        extra_dfs[var] = pd.DataFrame(ds.data)
-        log.info("  [1/5] loaded extra  '%s' → var='%s'  shape=%s", ds.name, var, extra_dfs[var].shape)
+        extra_dfs[sanitize_var_name(ds.name)] = pd.DataFrame(ds.data)
 
-    # ── Build data context ────────────────────────────────────────────────────
-    log.info("  [2/5] building data context …")
-    ctx_parts = [data_context(df, primary.name)]
-    for ds, (_, edf) in zip(datasets[1:], extra_dfs.items()):
-        ctx_parts.append(data_context(edf, ds.name))
+    # Step 2: Translate Thai keywords
+    translated_msg = translate_thai_keywords(message)
+    if translated_msg != message:
+        log.info("  translated: '%s' → '%s'", message[:60], translated_msg[:60])
 
-    primary_var = sanitize_var_name(primary.name)
-    if len(datasets) > 1:
-        var_list = "\n".join(
-            f"  - `{sanitize_var_name(ds.name)}` — {ds.name} ({len(ds.data):,} rows)"
-            for ds in datasets
-        )
-        multi_note = (
-            f"\nAVAILABLE DATASETS IN SCOPE:\n{var_list}\n"
-            f"The primary dataset is also available as `df` (alias for `{primary_var}`).\n"
-            f"Use these variable names directly in code — do NOT re-load or re-import them.\n"
-        )
-    else:
-        multi_note = ""
-
-    full_context = multi_note + "\n\n---\n\n".join(ctx_parts)
-    system_prompt = DS_SYSTEM_STEP1.format(data_context=full_context)
-
-    llm = get_llm(temperature=0.0)
-    history_msgs = build_lc_history(history[-6:]) if history else []
-
-    # ── Step 1: LLM generates answer / code ──────────────────────────────────
-    log.info("  [3/5] calling LLM (step-1: generate answer/code) …")
-    t_llm1 = time.perf_counter()
-    msgs = (
-        [SystemMessage(content=system_prompt)]
-        + history_msgs
-        + [HumanMessage(content=message)]
-    )
-    step1_reply = llm.invoke(msgs).content
-    log.info("  [3/5] LLM step-1 done  (%.1fs)", time.perf_counter() - t_llm1)
-
-    # ── Step 2: execute code blocks ───────────────────────────────────────────
-    code_blocks  = extract_code_blocks(step1_reply)
-    code_outputs: list[str]          = []
-    result_dfs:   list[pd.DataFrame] = []
-    chart_images: list[str]          = []
-    sandbox_dfs:  list[pd.DataFrame] = []
-    all_code = ""
-
-    if code_blocks:
-        log.info("  [4/5] executing %d code block(s) in sandbox …", len(code_blocks))
-    else:
-        log.info("  [4/5] no code blocks — skipping sandbox execution")
-
-    for i, block in enumerate(code_blocks, 1):
-        log.debug("  sandbox block %d:\n%s", i, block[:400])
-        t_exec = time.perf_counter()
-        stdout, result_df, chart_b64, sandbox_df = run_code(block, df, extra_dfs)
-        elapsed = time.perf_counter() - t_exec
-
-        code_outputs.append(stdout)
-        if result_df  is not None: result_dfs.append(result_df)
-        if chart_b64  is not None: chart_images.append(chart_b64)
-        if sandbox_df is not None: sandbox_dfs.append(sandbox_df)
-
-        if stdout.startswith("Code execution error"):
-            log.error("  sandbox block %d error (%.2fs): %s", i, elapsed, stdout)
-        else:
-            log.info(
-                "  sandbox block %d done (%.2fs)  result_df=%s  chart=%s  output='%s'",
-                i, elapsed,
-                result_df.shape if result_df is not None else None,
-                chart_b64 is not None,
-                stdout[:200],
-            )
-        all_code = (all_code + "\n" + block).strip()
-
-    artifacts: dict[str, Any] = {}
-    if all_code:
-        artifacts["code"] = all_code
-    if chart_images:
-        artifacts["chart_image"] = chart_images[0]
-        log.info("  chart captured  (total: %d)", len(chart_images))
-
-    # ── Step 3: LLM interprets execution output ───────────────────────────────
-    if code_outputs and all_code:
-        combined = "\n---\n".join(code_outputs)
-        artifacts["code_output"] = combined
-        log.info("  [5/5] calling LLM (step-2: interpret output) …")
-        t_llm2 = time.perf_counter()
-        interp = DS_SYSTEM_STEP2.format(
-            question=message, code=all_code, output=combined
-        )
-        final_text = llm.invoke([SystemMessage(content=interp)]).content
-        log.info("  [5/5] LLM step-2 done  (%.1fs)", time.perf_counter() - t_llm2)
-    else:
-        log.info("  [5/5] no code executed — using step-1 reply as final answer")
-        final_text = step1_reply
-
-    # ── Step 4: surface result DataFrame ─────────────────────────────────────
-    words = set(message.lower().split())
-    is_viz, is_generate, is_show, is_stats = _classify_intent(words, bool(chart_images))
+    # Step 3: Analyze context
+    ctx = analyze_context(df)
     log.info(
-        "  intent  viz=%s  generate=%s  show=%s  stats=%s",
-        is_viz, is_generate, is_show, is_stats,
+        "  context: %s, nulls=%d cols, dupes=%d",
+        ctx.shape, len(ctx.null_cols), ctx.duplicate_count,
     )
 
-    # Show/stats fallback: try to parse stdout as a DataFrame when no result_df captured
-    if (is_show or is_stats) and not result_dfs and code_outputs:
-        try:
-            import io as _io
-            parsed = pd.read_csv(
-                _io.StringIO(code_outputs[0].strip()),
-                sep=r"\s{2,}", engine="python",
-            )
-            if len(parsed) > 0 and len(parsed.columns) >= 2:
-                result_dfs.append(parsed)
-                log.info("  stdout-parse fallback produced df shape=%s", parsed.shape)
-        except Exception:
-            pass
+    # Step 4: Greeting shortcut (trivial — no AI needed)
+    if _is_pure_greeting(message):
+        elapsed = time.perf_counter() - t0
+        log.info("━━ DS-Agent done (greeting) elapsed=%.1fs ━━", elapsed)
+        return _handle_greeting(df, ctx, primary.name)
 
-    # Generate fallback: use sandbox df if LLM mutated df in-place
-    if is_generate and not is_viz and not result_dfs and sandbox_dfs:
-        candidate = sandbox_dfs[-1]
-        if len(candidate) > 0:
-            result_dfs.append(candidate)
-            log.info("  sandbox-df fallback  shape=%s", candidate.shape)
+    # Step 5: AI planner — the sole decision-maker
+    df_ctx = data_context(df, primary.name)
+    planner_llm = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id)
+    plan = plan_steps(
+        user_message=translated_msg,
+        df_context=df_ctx,
+        llm=planner_llm,
+    )
 
-    log.info("━━ DS-Agent done  total=%.1fs ━━", time.perf_counter() - t0)
+    # Step 6: Execute each step (follows planner's handler/codegen decisions)
+    executor_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
+    exec_result = execute_plan(
+        plan=plan,
+        df=df,
+        df_context=df_ctx,
+        llm=executor_llm,
+    )
 
-    if not result_dfs:
-        return final_text, artifacts
+    # Step 7: Build response text
+    final_text = _build_response_text(exec_result, plan, message, model_id)
 
-    result_df = result_dfs[0]
-    rows_data  = result_df.to_dict(orient="records")
+    # Step 8: Build artifacts
+    output_type = exec_result.get("output_type", "query")
+    artifacts: dict[str, Any] = {}
 
-    if is_generate:
-        dataset_name = _generate_dataset_name(llm, message)
-        artifacts["data_wrangled"]  = rows_data
-        artifacts["dataset_name"]   = dataset_name
-        artifacts["dataset_shape"]  = {"rows": len(result_df), "cols": len(result_df.columns)}
-        log.info("  artifact: new dataset '%s'  shape=%s", dataset_name, result_df.shape)
-    else:
-        artifacts["inline_table"] = rows_data
-        log.info("  artifact: inline_table  rows=%d  cols=%d", len(result_df), len(result_df.columns))
+    if exec_result.get("code"):
+        artifacts["code"] = exec_result["code"]
+
+    if exec_result.get("charts_plotly"):
+        artifacts["chart_json"] = exec_result["charts_plotly"][0]
+
+    final_df = exec_result.get("final_df")
+
+    if output_type == "generate" and final_df is not None:
+        rows_data = final_df.to_dict(orient="records")
+        dataset_name = _generate_dataset_name(message, model_id=model_id)
+        artifacts["data_wrangled"] = rows_data
+        artifacts["dataset_name"] = dataset_name
+        artifacts["dataset_shape"] = {
+            "rows": len(final_df),
+            "cols": len(final_df.columns),
+        }
+    elif final_df is not None:
+        artifacts["inline_table"] = final_df.to_dict(orient="records")
+
+    artifacts["output_type"] = output_type
+    artifacts["should_activate"] = False
+
+    elapsed = time.perf_counter() - t0
+    log.info(
+        "━━ DS-Agent done  output=%s  steps=%d  elapsed=%.1fs ━━",
+        output_type,
+        len(plan.get("steps", [])),
+        elapsed,
+    )
 
     return final_text, artifacts
 
 
-def _generate_dataset_name(llm: Any, message: str) -> str:
-    """Ask the LLM for a short snake_case name for the generated dataset."""
-    try:
-        reply = llm.invoke([HumanMessage(
-            content=(
-                f"Generate a short snake_case dataset name (max 5 words, no spaces) "
-                f"describing this data based on the user request: \"{message}\". "
-                f"Reply with ONLY the name, nothing else."
-            )
-        )]).content.strip().replace(" ", "_").lower()
-        return re.sub(r"[^a-z0-9_]", "", reply)[:60] or "result_dataset"
-    except Exception:
-        return "result_dataset"
+def _handle_greeting(
+    df: pd.DataFrame,
+    ctx,
+    dataset_name: str,
+) -> tuple[str, dict]:
+    """Handle pure greetings with a dataset summary."""
+    summary = (
+        f"Hello! You have the **{dataset_name}** dataset loaded "
+        f"({ctx.shape[0]:,} rows × {ctx.shape[1]} columns). "
+    )
+    if ctx.null_cols:
+        null_pct = sum(ctx.null_cols.values()) / len(ctx.null_cols)
+        summary += f"There are {len(ctx.null_cols)} columns with missing values (avg {null_pct:.1f}%). "
+    if ctx.duplicate_count > 0:
+        summary += f"Found {ctx.duplicate_count:,} duplicate rows. "
+    summary += "What would you like to do with this data?"
+
+    return summary, {"output_type": "text", "should_activate": False}
