@@ -1,4 +1,4 @@
-"""Code Generator — generates executable Python code for individual plan steps.
+"""Code Generator — generates executable Python code for plan steps.
 
 Called by the step executor when no pre-built handler matches.
 Uses LLM to write code that operates on the current DataFrame.
@@ -12,87 +12,89 @@ from api.logger import get_logger
 log = get_logger(__name__)
 
 CODE_GEN_PROMPT = """\
-Write Python code to perform this specific step:
+Write Python code for this data-science task:
 "{step_description}"
 
-## CURRENT DATAFRAME STATE
+## DATAFRAME CONTEXT
 {df_context}
 
 ## COLUMN DTYPES
 {dtypes}
 
-## RULES — ALL REQUIRED
-1. Input DataFrame is available as variable `df` — do NOT reload it
-2. Never hardcode column names — use actual columns from context above
-3. Use `df is None` check, never `if not df`
-4. Use format="mixed" for pd.to_datetime()
-5. For charts: assign to `fig` — never call fig.show()
-6. For new/modified DataFrame: assign to `result`
-7. For text output: use print()
-8. Wrap everything in try/except — print error on exception
-9. PLOTLY TYPE SAFETY: Always convert Interval/Category/mixed types to str
-   before passing to px.bar/px.pie x or names. Use .astype(str) or
-   [str(x) for x in values]. Never mix float and str in the same axis.
+## MANDATORY RULES
+1. The DataFrame is already loaded as `df` — NEVER reload or redefine it.
+2. Use ONLY actual column names from the dtypes list above — NEVER invent columns.
+3. Use `df is None` to check for None — NEVER use `if not df` (pandas ambiguity error).
+4. Use `format="mixed"` for any `pd.to_datetime()` call.
+5. For charts: assign to `fig` using plotly — NEVER call `fig.show()`.
+6. For new/modified DataFrames: assign to `result`.
+7. For text output: use `print()`.
+8. Wrap everything in try/except — print error message on exception.
+9. PLOTLY SAFETY: Always convert Interval/Category/mixed types to `str` before
+   passing to px.bar/px.pie etc. Use `.astype(str)` or `[str(x) for x in values]`.
+10. NEVER import pandas or numpy — they are already available as `pd` and `np`.
+11. For plotly: `px` and `go` are already available — just use them directly.
 
-## WHAT THIS STEP SHOULD PRODUCE
+## WHAT THIS STEP PRODUCES
 {produces}
 
 ## PREVIOUS ERROR (if retrying)
 {previous_error}
 
-## SPECIFIC GUIDANCE BY TASK TYPE
+## TASK-SPECIFIC TEMPLATES
 
-If injecting nulls:
-    import numpy as np
-    df_new = df.copy()
-    fraction = 0.15  # or whatever % user specified
-    for col in df_new.columns:
-        n = int(len(df_new) * fraction)
-        idx = np.random.choice(df_new.index, size=n, replace=False)
-        df_new.loc[idx, col] = np.nan
-    result = df_new
-    print(f"Injected nulls: {{result.isnull().sum().sum()}} total null cells")
-    print(f"Null percentage: {{result.isnull().mean().mean()*100:.1f}}%")
+### If injecting null values:
+```python
+result = df.copy()
+fraction = 0.15  # use actual percentage from task
+for col in result.columns:
+    n = int(len(result) * fraction)
+    idx = np.random.choice(result.index, size=n, replace=False)
+    result.loc[idx, col] = np.nan
+print(f"Injected nulls: {{result.isnull().sum().sum()}} total cells")
+print(f"Null percentage: {{result.isnull().mean().mean()*100:.1f}}%")
+```
 
-If binning/splitting:
-    def _fmt_num(n):
-        if abs(n) >= 1_000_000: return f"{{n/1_000_000:.1f}}M"
-        if abs(n) >= 1_000:     return f"{{int(n/1_000)}}K"
-        return f"{{n:.0f}}"
+### If binning/splitting into ranges:
+```python
+col_name = 'ActualColumnName'  # use real column name
+bins = pd.cut(df[col_name], bins=N)
+counts = bins.value_counts().sort_index()
 
-    def _fmt_bin(iv):
-        return f"{{_fmt_num(iv.left)}} – {{_fmt_num(iv.right)}}"
+def _fmt(n):
+    if abs(n) >= 1_000_000: return f"{{n/1_000_000:.1f}}M"
+    if abs(n) >= 1_000: return f"{{int(n/1_000)}}K"
+    return f"{{n:.0f}}"
 
-    col_name = 'ColumnName'  # use the actual column
-    bins = pd.cut(df[col_name], bins=N)
-    counts = bins.value_counts().sort_index()
-    labels = [_fmt_bin(b) for b in counts.index]  # human-readable "34K – 154K"
-    pcts = (counts / counts.sum() * 100).round(2)
-    result = pd.DataFrame({{'Range': labels, 'Count': counts.values, 'Percentage': pcts.values}})
-    print(result.to_string(index=False))
+labels = [f"{{_fmt(iv.left)}} – {{_fmt(iv.right)}}" for iv in counts.index]
+pcts = (counts / counts.sum() * 100).round(2)
+result = pd.DataFrame({{'Range': labels, 'Count': counts.values, 'Percentage': pcts.values}})
+print(result.to_string(index=False))
 
-    # Chart with formatted labels
-    import plotly.express as px
-    fig = px.bar(result, x='Range', y='Count', title=f'{{col_name}} Distribution',
-                 text='Count')
-    fig.update_traces(texttemplate='%{{text:,}}', textposition='outside',
-                      marker_color='#FB8C3C')
-    fig.update_layout(
-        template='plotly_white',
-        xaxis=dict(tickangle=0, tickfont=dict(size=12)),
-        yaxis=dict(title='Count', tickformat=','),
-        bargap=0.3,
-    )
+fig = px.bar(result, x='Range', y='Count', title=f'{{col_name}} Distribution', text='Count')
+fig.update_traces(texttemplate='%{{text:,}}', textposition='outside', marker_color='#FB8C3C')
+fig.update_layout(template='plotly_white', xaxis=dict(tickangle=0), bargap=0.3)
+```
 
-If generating chart:
-    import plotly.express as px
-    fig = px.chart_type(df, x='col', y='col', title='Column Distribution')
-    fig.update_layout(template="plotly_white")
-    # CHART TITLE RULE: Never use internal step description as title.
-    # Use the actual column name: f"{{col_name}} Distribution"
+### If creating a chart:
+```python
+fig = px.chart_type(df, x='actual_col', y='actual_col', title='Descriptive Title')
+fig.update_layout(template="plotly_white")
+# Title should describe the data, not the internal task
+```
+
+### If computing statistics/aggregations:
+```python
+# Do the computation
+result_value = df['col'].mean()
+print(f"Mean of col: {{result_value:,.2f}}")
+# If producing a table:
+result = pd.DataFrame({{...}})
+print(result.to_string(index=False))
+```
 
 ## OUTPUT
-Return ONLY executable Python code. No markdown, no explanation.
+Return ONLY executable Python code. No markdown fences. No explanation.
 """
 
 
@@ -114,7 +116,7 @@ def generate_step_code(
         df_context=df_context,
         dtypes=dtypes_str,
         produces=produces,
-        previous_error=previous_error or "None",
+        previous_error=previous_error or "None — first attempt",
     )
 
     response = llm.invoke(prompt)

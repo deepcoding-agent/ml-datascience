@@ -1,7 +1,8 @@
-"""AI Planner — chain-of-thought step planning for user requests.
+"""AI Planner — produces structured JSON execution plans.
 
-The planner reads the user message and dataset context, then produces
-a structured JSON plan of execution steps.  No hard-coded keyword routing.
+The planner reads the user message and dataset context, then outputs
+a structured plan where each step explicitly specifies either a
+handler (instant, 0 LLM calls) or codegen (LLM-generated code).
 """
 from __future__ import annotations
 
@@ -11,192 +12,202 @@ from api.logger import get_logger
 
 log = get_logger(__name__)
 
+# ── Handler catalog — embedded in the planner prompt ─────────────────────────
+# This tells the LLM exactly what handlers exist, their IDs, and params.
+
+HANDLER_CATALOG = """\
+### Stats (instant query — no dataset changes)
+| id | what it does | params |
+|----|-------------|--------|
+| stats.shape | row/column count, memory, duplicates | (none) |
+| stats.describe | descriptive statistics (mean, std, quartiles) | column? |
+| stats.null_report | null counts + percentages per column | (none) |
+| stats.dtypes | column data types, null%, unique counts | (none) |
+| stats.value_counts | top value frequencies for one column | column?, n? |
+| stats.unique_values | unique value count per column | (none) |
+| stats.correlation | correlation matrix + heatmap chart | (none) |
+| stats.skewness | skewness per numeric column | (none) |
+| stats.outlier_report | IQR-based outlier detection | (none) |
+| stats.duplicate_report | duplicate row count + sample | (none) |
+
+### Clean (modifies dataset → output_type MUST be "generate")
+| id | what it does | params |
+|----|-------------|--------|
+| clean.fill_nulls | fill missing values | column?, strategy? (auto/median/mean/mode/zero) |
+| clean.remove_duplicates | remove duplicate rows | (none) |
+| clean.fix_dtypes | auto-convert string→numeric/datetime | (none) |
+| clean.drop_column | drop column(s) | column, columns? |
+| clean.rename_column | rename a column | column (old), new_name |
+| clean.strip_whitespace | trim whitespace from strings | (none) |
+| clean.drop_nulls | drop rows/cols with nulls | column?, threshold? |
+
+### Transform (modifies dataset → output_type MUST be "generate")
+| id | what it does | params |
+|----|-------------|--------|
+| transform.filter | filter rows by condition | column, operator (>/</>=/<=//==/!=), value |
+| transform.sort | sort by column | column, ascending? (default true) |
+| transform.groupby_agg | group + aggregate | column, agg (count/sum/mean/max/min) |
+| transform.assign_value | set ALL values in a column to a constant | column, value |
+| transform.encode_label | label-encode categoricals | column? |
+| transform.encode_onehot | one-hot encode | column? |
+| transform.scale_standard | z-score standardization | (none) |
+| transform.scale_minmax | normalize to [0,1] | (none) |
+| transform.inject_null | inject random NaN values | value (number = percentage, e.g. 15 = 15%) |
+| transform.sample_rows | random sample of rows | n? |
+| transform.head | first N rows | n? |
+| transform.tail | last N rows | n? |
+
+### Viz (charts only — output_type should be "query")
+| id | what it does | params |
+|----|-------------|--------|
+| viz.bar_chart | bar chart of value counts | column?, percentage? |
+| viz.histogram | histogram of numeric column | column? |
+| viz.scatter | scatter plot | columns? (list: [x, y] or [x, y, color]) |
+| viz.line_chart | line chart | column? |
+| viz.box_plot | box plot | column? |
+| viz.violin_plot | violin plot | column? |
+| viz.heatmap | correlation heatmap | (none) |
+| viz.pie_chart | pie chart (auto-groups >5 cats) | column? |
+| viz.pairplot | scatter matrix | (none) |
+| viz.count_plot | count/frequency bar | column? |
+| viz.distribution | distribution + marginal box | column? |
+
+### Feature Engineering
+| id | what it does | params |
+|----|-------------|--------|
+| feature.feature_importance | feature importance ranking | (none) |
+| feature.pca | principal component analysis | (none) |
+| feature.log_transform | log transform numeric cols | (none) |
+| feature.correlation_filter | filter highly correlated features | (none) |
+"""
+
 PLANNER_PROMPT = """\
-You are a data science agent planner. A user has asked you to do something
-with their dataset. Your job is to break this into clear executable steps.
+You are the planner for a data-science agent. Given a user request and dataset,
+output a JSON execution plan.
 
 ## USER REQUEST
 {user_message}
 
-## DATASET CONTEXT
+## DATASET
 {df_context}
 
-## AVAILABLE PRE-BUILT HANDLERS
-These handlers are already implemented and can be called directly:
-{available_handlers}
+## AVAILABLE HANDLERS (use whenever possible — instant, no code generation)
+{handler_catalog}
 
-## YOUR TASK
-Think carefully about what the user wants. Then output a JSON plan.
+## DECISION RULES — READ CAREFULLY
 
-Rules:
-1. Read the user message literally — if they say "generate", you GENERATE
-2. If they say "create null", you CREATE null — do not check if nulls exist
-3. If they say "make", "create", "generate", "build" → output_type = "generate"
-4. If they ask a question or say "show", "plot", "visualize" → output_type = "query"
-5. Always consider: should this step include a visualization?
-   - If result is a distribution, count, or comparison → YES add chart step
-   - If result is a single number or text answer → NO chart needed
-   - If result is a new dataset → YES add preview chart step
-6. Never refuse a task — always find a way to do it
-7. If the user speaks Thai, still plan in English — Thai keywords are translated
+### When to use a handler
+ALWAYS prefer a handler when one fits. Handlers are instant, reliable, and tested.
+Scan the handler table above — if ANY handler matches the user's intent, use it.
 
-## STEP DESCRIPTION RULES — IMPORTANT
+### When to use codegen
+Use codegen ONLY when NO handler in the table above can do it:
+  - Binning/cutting with custom labels (pd.cut with formatting)
+  - Custom calculations (percentages, ratios, derived metrics)
+  - Pivot, melt, reshape, merge, join
+  - Moving average, rolling window, cumulative operations
+  - Complex multi-condition filtering
+  - Any custom math/logic not covered by a handler
 
-Write custom_code_description using these exact keywords when applicable
-so the system can route to fast pre-built functions (instant, no LLM call):
+### output_type
+  - "query" → stats, viz, questions, any read-only operation
+  - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
-Stats:    "get shape", "describe statistics", "null report", "data types",
-          "value counts", "correlation", "skewness", "outlier report",
-          "duplicate report", "unique values"
+### Other rules
+1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
+2. Keep plans SHORT: 1 step if possible, 2-3 for multi-part, max 5 steps.
+3. Each step has EITHER "handler" OR "codegen" — never both.
+4. For "tell me about the dataset" / "overview" / "info" → stats.describe
+5. For "show nulls" / "missing values" → stats.null_report
+6. For "fill nulls" / "fill missing" → clean.fill_nulls (NOT stats.null_report)
+7. For "inject/create/generate nulls" → transform.inject_null
+8. For any chart request → use the matching viz handler
+9. For "correlation" (no chart word) → stats.correlation
+10. For "correlation heatmap" → viz.heatmap
+11. If user speaks Thai, translate intent to English and plan normally.
 
-Clean:    "fill null", "fill missing", "remove duplicates",
-          "fix dtypes", "drop column", "rename column"
+## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
 
-Transform: "filter rows", "sort by", "group by", "assign value",
-           "label encode", "one hot encode", "standard scale",
-           "minmax normalize", "sample rows", "head", "tail"
+For handler steps:
+{{"step_num":1,"description":"...","handler":{{"id":"category.sub","params":{{}}}}}}
 
-Viz:      "bar chart", "histogram", "pie chart", "scatter plot",
-          "line chart", "box plot", "heatmap", "pairplot", "violin"
+For codegen steps:
+{{"step_num":2,"description":"...","codegen":{{"task":"detailed Python task description","produces":"dataframe|chart|text"}}}}
 
-For custom operations NOT in the list above (binning, moving average,
-z-score, null injection, percent calculations, etc.) — describe in
-plain English, code will be generated fresh.
-
-## STEP OUTPUT TYPE
-
-produces="chart" → set add_visualization=true, set visualization_type
-produces="dataframe" → describe what the code should do
-produces="text" → describe what to print/compute
-
-## OUTPUT FORMAT — JSON ONLY
+Full format:
 {{
-  "understanding": "what the user wants in one sentence",
+  "understanding": "one sentence",
   "output_type": "query | generate",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "what this step does",
-      "custom_code_description": "what the Python code should do (required for dataframe/text steps)",
-      "produces": "dataframe | chart | text | number",
-      "add_visualization": true/false,
-      "visualization_type": "bar | histogram | pie | scatter | line | box | heatmap | violin | null",
-      "handler_params": {{}}
-    }}
-  ],
-  "final_output": "what the user will see at the end"
+  "steps": [ ... ]
 }}
 
 ## EXAMPLES
 
-Request: "generate random null to dataset"
-{{
-  "understanding": "User wants to inject random null values into the dataset",
-  "output_type": "generate",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "Inject ~15% random NaN values into all columns",
-      "custom_code_description": "Copy df, randomly set 15% of cells in each column to NaN using np.random.choice, assign to result, print null counts and percentage",
-      "produces": "dataframe",
-      "add_visualization": true,
-      "visualization_type": "bar"
-    }}
-  ],
-  "final_output": "New dataset with random null values injected, plus a bar chart showing null counts per column"
-}}
+User: "how many rows and columns"
+{{"understanding":"Get dataset dimensions","output_type":"query","steps":[{{"step_num":1,"description":"Get dataset shape","handler":{{"id":"stats.shape","params":{{}}}}}}]}}
 
-Request: "how many rows and columns"
-{{
-  "understanding": "User wants the shape of the dataset",
-  "output_type": "query",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "Get shape of the dataset",
-      "custom_code_description": "get shape — how many rows and columns",
-      "produces": "text",
-      "add_visualization": false,
-      "visualization_type": null
-    }}
-  ],
-  "final_output": "The dataset has N rows and M columns"
-}}
+User: "fill missing values with median"
+{{"understanding":"Fill all nulls using median","output_type":"generate","steps":[{{"step_num":1,"description":"Fill nulls with median","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"median"}}}}}}]}}
 
-Request: "split price into 5 levels and show percent of each"
-{{
-  "understanding": "Bin SalePrice into 5 ranges, show count and percentage per bin",
-  "output_type": "query",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "Bin SalePrice into 5 equal ranges and calculate count + percentage per level",
-      "custom_code_description": "Use pd.cut on SalePrice with bins=5, count each bin, calculate percentage, store as result with columns Range/Count/Percentage. Format bin labels as human-readable (e.g. 34K-154K)",
-      "produces": "dataframe",
-      "add_visualization": true,
-      "visualization_type": "bar"
-    }}
-  ],
-  "final_output": "Table and bar chart showing the percentage distribution across 5 price levels"
-}}
+User: "show bar chart of bedroom counts"
+{{"understanding":"Bar chart of bedroom distribution","output_type":"query","steps":[{{"step_num":1,"description":"Bar chart of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"BedroomAbvGr"}}}}}}]}}
 
-Request: "remove duplicates then fill missing values with median"
-{{
-  "understanding": "Clean dataset by removing duplicate rows then filling nulls with median",
-  "output_type": "generate",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "Remove duplicate rows",
-      "custom_code_description": "remove duplicate rows from dataset",
-      "produces": "dataframe",
-      "add_visualization": false,
-      "visualization_type": null
-    }},
-    {{
-      "step_num": 2,
-      "description": "Fill missing values with median",
-      "custom_code_description": "fill null values with median for numeric columns",
-      "produces": "dataframe",
-      "add_visualization": false,
-      "visualization_type": null
-    }}
-  ],
-  "final_output": "Cleaned dataset with duplicates removed and missing values filled with median"
-}}
+User: "correlation heatmap"
+{{"understanding":"Show correlation heatmap","output_type":"query","steps":[{{"step_num":1,"description":"Correlation heatmap","handler":{{"id":"viz.heatmap","params":{{}}}}}}]}}
 
-Request: "show pie chart of bedroom counts"
-{{
-  "understanding": "User wants a pie chart showing the distribution of bedroom counts",
-  "output_type": "query",
-  "steps": [
-    {{
-      "step_num": 1,
-      "description": "Create pie chart of bedroom distribution",
-      "produces": "chart",
-      "add_visualization": true,
-      "visualization_type": "pie",
-      "handler_params": {{"column": "BedroomAbvGr"}}
-    }}
-  ],
-  "final_output": "Pie chart showing bedroom count distribution"
-}}
+User: "inject 15% random nulls"
+{{"understanding":"Inject random null values","output_type":"generate","steps":[{{"step_num":1,"description":"Inject 15% random nulls","handler":{{"id":"transform.inject_null","params":{{"value":15}}}}}}]}}
 
-IMPORTANT: Output ONLY valid JSON. No markdown, no explanation outside JSON.
+User: "remove duplicates then fill missing values"
+{{"understanding":"Clean: deduplicate then fill nulls","output_type":"generate","steps":[{{"step_num":1,"description":"Remove duplicates","handler":{{"id":"clean.remove_duplicates","params":{{}}}}}},{{"step_num":2,"description":"Fill missing values","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"auto"}}}}}}]}}
+
+User: "split price into 5 levels and show percentage"
+{{"understanding":"Bin price into 5 ranges with percentages","output_type":"query","steps":[{{"step_num":1,"description":"Bin price into 5 ranges with count and percentage","codegen":{{"task":"Use pd.cut on the price column with bins=5. Count each bin, calculate percentage. Create result DataFrame with Range/Count/Percentage. Format bin labels as human-readable (34K-154K). Create bar chart: fig = px.bar(result, x='Range', y='Count', title='Price Distribution', text='Count')","produces":"dataframe"}}}}]}}
+
+User: "describe the dataset"
+{{"understanding":"Show descriptive statistics","output_type":"query","steps":[{{"step_num":1,"description":"Descriptive statistics","handler":{{"id":"stats.describe","params":{{}}}}}}]}}
+
+User: "set all values of MSSubClass to 111"
+{{"understanding":"Assign constant value to column","output_type":"generate","steps":[{{"step_num":1,"description":"Set MSSubClass to 111","handler":{{"id":"transform.assign_value","params":{{"column":"MSSubClass","value":111}}}}}}]}}
+
+User: "show me nulls"
+{{"understanding":"Check missing values","output_type":"query","steps":[{{"step_num":1,"description":"Null report","handler":{{"id":"stats.null_report","params":{{}}}}}}]}}
+
+User: "generate random null 15%"
+{{"understanding":"Inject 15% random nulls","output_type":"generate","steps":[{{"step_num":1,"description":"Inject 15% random nulls","handler":{{"id":"transform.inject_null","params":{{"value":15}}}}}}]}}
+
+User: "บอกข้อมูลของ data ชุดนี้" (tell me about this dataset)
+{{"understanding":"Dataset overview","output_type":"query","steps":[{{"step_num":1,"description":"Descriptive statistics","handler":{{"id":"stats.describe","params":{{}}}}}}]}}
+
+User: "เปลี่ยนค่า MSSubClass ให้เป็น 999" (change MSSubClass to 999)
+{{"understanding":"Set MSSubClass to 999","output_type":"generate","steps":[{{"step_num":1,"description":"Assign 999 to MSSubClass","handler":{{"id":"transform.assign_value","params":{{"column":"MSSubClass","value":999}}}}}}]}}
+
+User: "sort by price descending"
+{{"understanding":"Sort by price descending","output_type":"generate","steps":[{{"step_num":1,"description":"Sort by SalePrice descending","handler":{{"id":"transform.sort","params":{{"column":"SalePrice","ascending":false}}}}}}]}}
+
+User: "show top 5 neighborhoods by count"
+{{"understanding":"Value counts of neighborhoods","output_type":"query","steps":[{{"step_num":1,"description":"Top 5 neighborhoods","handler":{{"id":"stats.value_counts","params":{{"column":"Neighborhood","n":5}}}}}}]}}
+
+User: "label encode all categorical columns"
+{{"understanding":"Label encode categoricals","output_type":"generate","steps":[{{"step_num":1,"description":"Label encode categorical columns","handler":{{"id":"transform.encode_label","params":{{}}}}}}]}}
+
+User: "filter rows where price > 200000"
+{{"understanding":"Filter expensive houses","output_type":"generate","steps":[{{"step_num":1,"description":"Filter SalePrice > 200000","handler":{{"id":"transform.filter","params":{{"column":"SalePrice","operator":">","value":200000}}}}}}]}}
+
+IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
 
 
 def plan_steps(
     user_message: str,
     df_context: str,
-    available_handlers: list[str],
     llm,
 ) -> dict:
     """Ask LLM to plan execution steps. Returns structured plan dict."""
     prompt = PLANNER_PROMPT.format(
         user_message=user_message,
         df_context=df_context,
-        available_handlers="\n".join(f"  - {h}" for h in available_handlers),
+        handler_catalog=HANDLER_CATALOG,
     )
 
     response = llm.invoke(prompt)
@@ -218,24 +229,18 @@ def plan_steps(
         )
         return plan
     except json.JSONDecodeError:
-        log.error("Planner returned invalid JSON: %s", raw[:200])
-        # Fallback plan — execute as custom code
+        log.error("Planner returned invalid JSON: %s", raw[:300])
         return {
             "understanding": user_message,
             "output_type": "query",
             "steps": [
                 {
                     "step_num": 1,
-                    "description": f"Execute: {user_message}",
-                    "use_handler": None,
-                    "handler_category": None,
-                    "handler_params": {},
-                    "needs_custom_code": True,
-                    "custom_code_description": user_message,
-                    "produces": "dataframe",
-                    "add_visualization": False,
-                    "visualization_type": None,
+                    "description": user_message,
+                    "codegen": {
+                        "task": user_message,
+                        "produces": "text",
+                    },
                 }
             ],
-            "final_output": "Result of requested operation",
         }

@@ -1,9 +1,15 @@
 """
-DS-Agent Orchestrator — AI-first step executor agent.
+DS-Agent Orchestrator — AI-first routing.
 
-No hard-coded keyword routing. The AI planner reads the user message,
-plans execution steps, and the step executor runs them using pre-built
-handlers or LLM-generated code.
+The AI planner is the SOLE decision-maker for handler vs codegen routing.
+No hardcoded keywords, no regex patterns. The planner sees the full handler
+catalog and decides what to use for each step.
+
+Flow:
+  1. Greeting shortcut (trivial, no AI)
+  2. AI Planner → structured plan with handler.id or codegen per step
+  3. Step Executor → follows planner decisions, codegen fallback on failure
+  4. Response → handler summary (fast) or LLM interpreter (codegen results)
 """
 from __future__ import annotations
 
@@ -19,7 +25,6 @@ from api.agents.planner import plan_steps
 from api.agents.result_interpreter import interpret_final_result
 from api.agents.step_executor import execute_plan
 from api.context import data_context, sanitize_var_name
-from api.handlers import HANDLER_REGISTRY
 from api.handlers.base import translate_thai_keywords
 from api.llm import build_lc_history, get_llm
 from api.logger import get_logger
@@ -31,14 +36,14 @@ log = get_logger(__name__)
 
 _GREETINGS = frozenset({
     "hi", "hello", "hey", "สวัสดี", "หวัดดี", "ดีครับ", "ดีค่ะ",
-    "yo", "sup", "hola",
+    "yo", "sup", "hola", "good morning", "good afternoon",
 })
 
 
 def _is_pure_greeting(message: str) -> bool:
     """Only trigger greeting for very short messages with no task words."""
     words = message.lower().strip().split()
-    return len(words) <= 2 and any(w in _GREETINGS for w in words)
+    return len(words) <= 3 and any(w in _GREETINGS for w in words)
 
 
 # ── Dataset name generator ───────────────────────────────────────────────────
@@ -55,6 +60,36 @@ def _generate_dataset_name(message: str, model_id: str | None = None) -> str:
         return "result_dataset"
 
 
+# ── Response building ────────────────────────────────────────────────────────
+
+def _build_response_text(
+    exec_result: dict,
+    plan: dict,
+    message: str,
+    model_id: str | None,
+) -> str:
+    """Build response text.
+
+    - Handler-only results → use handler summaries directly (no extra LLM call)
+    - Codegen or mixed results → LLM interpreter for richer explanation
+    """
+    stdout = exec_result.get("stdout", "")
+    step_results = exec_result.get("step_results", [])
+
+    # If all steps used handlers and there's stdout, use it directly
+    all_handler = step_results and all(s.get("used_handler") for s in step_results)
+    if all_handler and stdout:
+        return stdout
+
+    # For codegen or mixed results, use LLM interpreter
+    try:
+        interp_llm = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
+        return interpret_final_result(message, plan, exec_result, interp_llm)
+    except Exception as e:
+        log.error("Interpretation failed: %s", e)
+        return stdout or "Operation completed."
+
+
 # ── Main orchestrator ────────────────────────────────────────────────────────
 
 def run_datascience_agent(
@@ -63,7 +98,7 @@ def run_datascience_agent(
     history: list[ChatMessage],
     model_id: str | None = None,
 ) -> tuple[str, dict]:
-    """AI-first agent: plan → execute → interpret. No keyword routing."""
+    """AI-first agent: planner decides everything, no hardcoded routing."""
     t0 = time.perf_counter()
     primary = datasets[0]
 
@@ -86,26 +121,22 @@ def run_datascience_agent(
         ctx.shape, len(ctx.null_cols), ctx.duplicate_count,
     )
 
-    # Step 4: Greeting shortcut
+    # Step 4: Greeting shortcut (trivial — no AI needed)
     if _is_pure_greeting(message):
-        return _handle_greeting(df, ctx, primary.name, model_id)
+        elapsed = time.perf_counter() - t0
+        log.info("━━ DS-Agent done (greeting) elapsed=%.1fs ━━", elapsed)
+        return _handle_greeting(df, ctx, primary.name)
 
-    # Step 5: Build LLM context and handler list
+    # Step 5: AI planner — the sole decision-maker
     df_ctx = data_context(df, primary.name)
-    available_handlers = [
-        f"{sub} ({cat})" for (cat, sub) in HANDLER_REGISTRY.keys()
-    ]
-
-    # Step 6: AI plans what to do
     planner_llm = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id)
     plan = plan_steps(
         user_message=translated_msg,
         df_context=df_ctx,
-        available_handlers=available_handlers,
         llm=planner_llm,
     )
 
-    # Step 7: Execute each step
+    # Step 6: Execute each step (follows planner's handler/codegen decisions)
     executor_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
     exec_result = execute_plan(
         plan=plan,
@@ -114,16 +145,10 @@ def run_datascience_agent(
         llm=executor_llm,
     )
 
-    # Step 8: AI interprets final result with REAL numbers
-    interp_llm = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
-    final_text = interpret_final_result(
-        user_message=message,
-        plan=plan,
-        exec_result=exec_result,
-        llm=interp_llm,
-    )
+    # Step 7: Build response text
+    final_text = _build_response_text(exec_result, plan, message, model_id)
 
-    # Step 9: Build artifacts
+    # Step 8: Build artifacts
     output_type = exec_result.get("output_type", "query")
     artifacts: dict[str, Any] = {}
 
@@ -150,11 +175,12 @@ def run_datascience_agent(
     artifacts["output_type"] = output_type
     artifacts["should_activate"] = False
 
+    elapsed = time.perf_counter() - t0
     log.info(
         "━━ DS-Agent done  output=%s  steps=%d  elapsed=%.1fs ━━",
         output_type,
         len(plan.get("steps", [])),
-        time.perf_counter() - t0,
+        elapsed,
     )
 
     return final_text, artifacts
@@ -164,7 +190,6 @@ def _handle_greeting(
     df: pd.DataFrame,
     ctx,
     dataset_name: str,
-    model_id: str | None,
 ) -> tuple[str, dict]:
     """Handle pure greetings with a dataset summary."""
     summary = (
@@ -172,7 +197,7 @@ def _handle_greeting(
         f"({ctx.shape[0]:,} rows × {ctx.shape[1]} columns). "
     )
     if ctx.null_cols:
-        null_pct = sum(pct for _, pct in ctx.null_cols) / len(ctx.null_cols)
+        null_pct = sum(ctx.null_cols.values()) / len(ctx.null_cols)
         summary += f"There are {len(ctx.null_cols)} columns with missing values (avg {null_pct:.1f}%). "
     if ctx.duplicate_count > 0:
         summary += f"Found {ctx.duplicate_count:,} duplicate rows. "
