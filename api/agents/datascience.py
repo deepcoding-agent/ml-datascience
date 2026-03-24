@@ -20,7 +20,11 @@ from api.agents.intent_classifier import IntentResult, classify_intent, generate
 from api.agents.result_validator import validate_result
 from api.context import data_context, extract_code_blocks, sanitize_var_name
 from api.handlers import get_handler
-from api.handlers.base import BaseHandler, HandlerResult
+from api.handlers.base import (
+    BaseHandler, HandlerResult,
+    get_useless_columns, has_visualization_intent, select_chart_type,
+    translate_thai_keywords,
+)
 from api.llm import build_lc_history, get_llm
 from api.logger import get_logger
 from api.models import ChatMessage, DatasetPayload
@@ -163,20 +167,63 @@ def run_datascience_agent(
     for ds in datasets[1:]:
         extra_dfs[sanitize_var_name(ds.name)] = pd.DataFrame(ds.data)
 
-    # Step 2: Analyze context
-    ctx = analyze_context(df)
-    log.info("  context: %s, nulls=%d cols, dupes=%d", ctx.shape, len(ctx.null_cols), ctx.duplicate_count)
+    # Step 2: Translate Thai keywords → English before any matching
+    translated_msg = translate_thai_keywords(message)
+    if translated_msg != message:
+        log.info("  translated: '%s' → '%s'", message[:60], translated_msg[:60])
 
-    # Step 3: Classify intent
-    intent = classify_intent(message, ctx, history)
-    log.info("  intent: %s/%s  conf=%.2f  output=%s  fallback=%s",
-             intent.category, intent.sub_intent, intent.confidence,
-             intent.output_type, intent.fallback_to_custom)
+    # Step 3: Analyze context + detect useless columns
+    ctx = analyze_context(df)
+    useless_cols = get_useless_columns(df)
+    log.info("  context: %s, nulls=%d cols, dupes=%d, useless=%s",
+             ctx.shape, len(ctx.null_cols), ctx.duplicate_count, useless_cols)
 
     result: HandlerResult | None = None
+    intent = IntentResult()  # default, overwritten below
+
+    # Step 4: Visualization fast-path — skip intent classification
+    if has_visualization_intent(translated_msg):
+        log.info("  viz fast-path triggered")
+        # Find target column via fuzzy match on translated message
+        target_col = None
+        for word in re.split(r"[\s,;]+", translated_msg.lower()):
+            if len(word) < 3:
+                continue
+            from api.agents.intent_classifier import STRUCTURAL_KEYWORDS
+            if word in STRUCTURAL_KEYWORDS:
+                continue
+            match = BaseHandler.smart_column_match(df, word, exclude=useless_cols)
+            if match:
+                target_col = match
+                break
+        if target_col:
+            chart_type = select_chart_type(df, target_col)
+            log.info("  viz: col='%s' chart='%s'", target_col, chart_type)
+            from api.handlers.viz_handler import VizHandler
+            viz_params = {"column": target_col}
+            viz_map = {"bar": VizHandler.handle_bar_chart, "histogram": VizHandler.handle_histogram,
+                       "line": VizHandler.handle_line_chart}
+            handler_fn = viz_map.get(chart_type, VizHandler.handle_bar_chart)
+            result = handler_fn(df, viz_params)
+            if result:
+                result.metadata["tier"] = 1
+            # Skip to interpretation
+            intent = IntentResult(category="viz", sub_intent=chart_type, params=viz_params,
+                                  output_type="query", confidence=1.0, fallback_to_custom=False)
+        else:
+            log.info("  viz: no target column found, falling through")
+
+    # Step 5: Classify intent (if not already resolved by viz fast-path)
+    if not (has_visualization_intent(translated_msg) and result is not None and result.success):
+        intent = classify_intent(translated_msg, ctx, history)
+        log.info("  intent: %s/%s  conf=%.2f  output=%s  fallback=%s",
+                 intent.category, intent.sub_intent, intent.confidence,
+                 intent.output_type, intent.fallback_to_custom)
+
+    result_resolved = result is not None and result.success
 
     # ── TIER 1: Pre-built handler ─────────────────────────────────────────
-    if intent.confidence >= 0.3 and not intent.fallback_to_custom:
+    if not result_resolved and intent.confidence >= 0.3 and not intent.fallback_to_custom:
         handler_fn = get_handler(intent.category, intent.sub_intent)
         if handler_fn:
             log.info("  TIER 1: pre-built handler %s/%s", intent.category, intent.sub_intent)
@@ -298,7 +345,9 @@ def run_datascience_agent(
 def _extract_operation_params(message: str, df: pd.DataFrame) -> dict:
     """Extract concrete parameters from the user message."""
     params: dict = {}
-    msg = message.lower()
+    # Translate Thai keywords first
+    translated = translate_thai_keywords(message)
+    msg = translated.lower()
 
     # Percentage
     import re as _re
@@ -312,17 +361,20 @@ def _extract_operation_params(message: str, df: pd.DataFrame) -> dict:
     if n_match:
         params["n"] = int(n_match.group(1))
 
-    # Column match — skip structural keywords
+    # Column match — skip structural keywords and useless columns
     from api.agents.intent_classifier import STRUCTURAL_KEYWORDS
+    useless = get_useless_columns(df)
     for col in df.columns:
-        if col.lower() in msg or col in message:
+        if col in useless:
+            continue
+        if col.lower() in msg or col in translated:
             params["column"] = col
             break
     if "column" not in params:
         for word in msg.split():
             if word in STRUCTURAL_KEYWORDS:
                 continue
-            match = BaseHandler.smart_column_match(df, word)
+            match = BaseHandler.smart_column_match(df, word, exclude=useless)
             if match:
                 params["column"] = match
                 break

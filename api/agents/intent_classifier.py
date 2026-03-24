@@ -8,7 +8,7 @@ from typing import Optional
 import pandas as pd
 
 from api.agents.context_analyzer import DataContext
-from api.handlers.base import BaseHandler
+from api.handlers.base import BaseHandler, get_useless_columns, translate_thai_keywords
 
 
 @dataclass
@@ -124,10 +124,12 @@ def classify_intent(
     conversation_history: list | None = None,
 ) -> IntentResult:
     """Classify user message into category + sub_intent + params."""
-    msg_lower = message.lower().strip()
+    # Translate Thai keywords before any matching
+    translated = translate_thai_keywords(message)
+    msg_lower = translated.lower().strip()
 
     # Guard: structural-only queries go straight to shape handler
-    if is_structural_query(message):
+    if is_structural_query(translated):
         return IntentResult(
             category="stats", sub_intent="shape", params={},
             output_type="query", confidence=1.0, fallback_to_custom=False,
@@ -175,16 +177,21 @@ def classify_intent(
 def extract_params(message: str, sub_intent: str, ctx: DataContext) -> dict:
     """Extract operation parameters from the user message."""
     params: dict = {}
-    msg = message.strip()
+    # Translate Thai → English before matching
+    translated = translate_thai_keywords(message)
+    msg = translated.strip()
+
+    # Detect useless columns to exclude from matching
+    dummy_df = pd.DataFrame(columns=ctx.column_list)
+    useless = get_useless_columns(dummy_df) if len(ctx.column_list) > 0 else set()
 
     # Try to find column names mentioned in the message
-    # Skip structural keywords — they are not column references
+    # Skip structural keywords and useless columns
     matched_cols: list[str] = []
-    dummy_df = pd.DataFrame(columns=ctx.column_list)
     for word in re.split(r"[\s,;]+", msg):
         if len(word) < 2 or word.lower() in STRUCTURAL_KEYWORDS:
             continue
-        match = BaseHandler.smart_column_match(dummy_df, word)
+        match = BaseHandler.smart_column_match(dummy_df, word, exclude=useless)
         if match:
             matched_cols.append(match)
 
