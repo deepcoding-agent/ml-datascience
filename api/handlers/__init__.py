@@ -52,6 +52,9 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("clean", "lowercase_values"):   CleanHandler.handle_lowercase_values,
     ("clean", "map_values"):         CleanHandler.handle_map_values,
     ("clean", "reset_index"):        CleanHandler.handle_reset_index,
+    ("clean", "fill_with_value"):    CleanHandler.handle_fill_with_value,
+    ("clean", "deduplicate_by"):     CleanHandler.handle_deduplicate_by,
+    ("clean", "drop_id_columns"):    CleanHandler.handle_drop_id_columns,
     # Transform
     ("transform", "filter"):         TransformHandler.handle_filter,
     ("transform", "assign_value"):   TransformHandler.handle_assign_value,

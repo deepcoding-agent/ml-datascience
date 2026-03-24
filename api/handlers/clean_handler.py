@@ -351,3 +351,83 @@ class CleanHandler(BaseHandler):
             success=True, result_df=result, output_type="generate",
             summary=f"Reset index (0 to {len(result)-1})",
         )
+
+    @staticmethod
+    def handle_fill_with_value(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Fill nulls with a specific constant value (e.g. -1, 0, 'Unknown', 'N/A')."""
+        col = params.get("column")
+        value = params.get("value", 0)
+        result = df.copy()
+        before_nulls = int(result.isna().sum().sum())
+
+        if col and col in result.columns:
+            result[col] = result[col].fillna(value)
+            summary_target = f"in '{col}'"
+        else:
+            result = result.fillna(value)
+            summary_target = "in all columns"
+
+        after_nulls = int(result.isna().sum().sum())
+        filled = before_nulls - after_nulls
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Filled {filled:,} nulls with {repr(value)} {summary_target}",
+        )
+
+    @staticmethod
+    def handle_deduplicate_by(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Remove duplicates based on specific column(s), keeping first or last."""
+        cols = params.get("columns", [])
+        col = params.get("column")
+        keep = params.get("keep", "first")
+
+        subset = cols if cols else ([col] if col and col in df.columns else None)
+        if subset:
+            subset = [c for c in subset if c in df.columns]
+            if not subset:
+                return HandlerResult(success=False, error="No valid columns specified for deduplication")
+
+        before = len(df)
+        result = df.drop_duplicates(subset=subset, keep=keep).reset_index(drop=True)
+        removed = before - len(result)
+        col_desc = f" by {subset}" if subset else ""
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Removed {removed:,} duplicates{col_desc} (keep={keep}): {before:,} → {len(result):,}",
+        )
+
+    @staticmethod
+    def handle_drop_id_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Auto-detect and drop ID-like columns (high unique ratio, sequential, generic names)."""
+        result = df.copy()
+        id_cols = []
+
+        for c in result.columns:
+            col_lower = c.lower().strip("_")
+            n_unique = result[c].nunique()
+            unique_ratio = n_unique / len(result) if len(result) > 0 else 0
+
+            # Name-based: short generic ID names
+            is_id_name = (
+                col_lower in ("id", "index", "idx", "key", "row", "num", "number", "seq", "serial")
+                or (col_lower.endswith("id") and len(col_lower) <= 6)
+                or col_lower == "unnamed: 0"
+            )
+            # Value-based: nearly all unique + numeric + sequential
+            is_sequential = False
+            if pd.api.types.is_numeric_dtype(result[c]) and unique_ratio > 0.95:
+                sorted_vals = result[c].dropna().sort_values()
+                if len(sorted_vals) > 1:
+                    diffs = sorted_vals.diff().dropna()
+                    is_sequential = (diffs == diffs.iloc[0]).mean() > 0.95
+
+            if is_id_name or (unique_ratio > 0.95 and is_sequential):
+                id_cols.append(c)
+
+        if id_cols:
+            result = result.drop(columns=id_cols)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Dropped {len(id_cols)} ID-like column(s): {id_cols}" if id_cols else "No ID-like columns detected",
+        )

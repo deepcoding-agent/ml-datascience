@@ -58,6 +58,9 @@ HANDLER_CATALOG = """\
 | clean.lowercase_values | lowercase all string values | column? |
 | clean.map_values | recode/map values in a column | column, mapping (dict e.g. {"M":"Male"}) |
 | clean.reset_index | reset index to 0-based | (none) |
+| clean.fill_with_value | fill nulls with specific constant | column?, value (e.g. -1, "Unknown") |
+| clean.deduplicate_by | remove duplicates by specific column(s) | column?, columns?, keep? (first/last) |
+| clean.drop_id_columns | auto-detect and drop ID-like columns | (none) |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
