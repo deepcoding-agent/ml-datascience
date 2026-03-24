@@ -1,16 +1,9 @@
 """
-DS-Agent Orchestrator — multi-step reasoning agent for data science tasks.
+DS-Agent Orchestrator — 3-tier multi-step reasoning agent.
 
-Flow
-----
-1. Load DataFrames from dataset payloads
-2. Analyze context (nulls, skewness, shape, etc.)
-3. Classify intent (category + sub_intent + params)
-4. Route to pre-built handler OR fallback to LLM code generation
-5. Validate result
-6. Retry if failed (up to 1 retry with different strategy)
-7. LLM interprets result
-8. Build final response with output routing
+Tier 1: Pre-built handlers      → instant, zero LLM call
+Tier 2: Dynamic handler gen     → LLM writes reusable handler, validates, caches
+Tier 3: One-shot sandbox exec   → fallback for unique tasks
 """
 from __future__ import annotations
 
@@ -22,12 +15,12 @@ import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from api.agents.context_analyzer import DataContext, analyze_context
-from api.agents.intent_classifier import IntentResult, classify_intent
+from api.agents.handler_generator import generate_handler
+from api.agents.intent_classifier import IntentResult, classify_intent, generate_handler_name
 from api.agents.result_validator import validate_result
 from api.context import data_context, extract_code_blocks, sanitize_var_name
 from api.handlers import get_handler
-from api.handlers.base import HandlerResult
-from api.handlers.code_handler import CodeHandler
+from api.handlers.base import BaseHandler, HandlerResult
 from api.llm import build_lc_history, get_llm
 from api.logger import get_logger
 from api.models import ChatMessage, DatasetPayload
@@ -38,43 +31,37 @@ log = get_logger(__name__)
 # ── System prompts ────────────────────────────────────────────────────────────
 
 DS_SYSTEM_CODEGEN = """\
-You are PrepPilot's Data Science Agent — an expert Python data analyst.
+You are PrepPilot's Data Science Agent — expert Python analyst.
 The dataset is ALREADY LOADED as `df`. Use it directly.
 
-CORE RULES:
+RULES:
 - Be CONCISE. Direct answer first, brief explanation.
-- COLUMN MATCHING: Match user keywords to actual column names from context below.
-  Never hallucinate column names. If ambiguous, mention which column you picked.
-- LANGUAGE: Respond in the same language the user used.
-- Write ONE clean Python code block. `df` is pre-loaded.
-- Always use print() for output. Assign results to `result` variable.
-- For generate/modify: result = df.copy() → modify result → print(result.shape)
-- For viewing: result = df.head(N); print(result)
-- For charts: fig = px.chart_type(...) — system captures `fig` automatically.
-  Never call fig.show(). Available: px, go, make_subplots, ff.
-- NULL INJECTION: When user says "inject null", "add null", "แทรก null", "สร้าง dataset มี null":
-  df_new = df.copy(); for col in df_new.columns: idx = np.random.choice(df_new.index, size=int(len(df_new)*fraction), replace=False); df_new.loc[idx, col] = np.nan
-  result = df_new — NEVER just count existing nulls. output_type = "generate" always.
+- COLUMN MATCHING: Match user keywords to actual column names from context.
+  Never hallucinate column names.
+- LANGUAGE: Respond in same language as user.
+- Write ONE Python code block. `df` is pre-loaded.
+- Always print() for output. Assign to `result`.
+- For modify: result = df.copy() → modify → print(result.shape)
+- For charts: fig = px.chart_type(...) — captured automatically. Never fig.show().
+  Available: px, go, make_subplots, ff, sns, msno.
+- NULL INJECTION: "inject null"/"add null"/"แทรก null" → df_new = df.copy(),
+  randomly set X% to NaN. result = df_new. output_type = "generate".
 
 {data_context}
 """
 
 DS_SYSTEM_INTERPRET = """\
 You are a data science assistant interpreting execution output.
-Be concise — lead with the key finding. 2-3 sentences max.
-Use bullet points for multiple findings (max 5).
+Be concise — lead with key finding. 2-3 sentences max. Bullets for multiple findings.
 Respond in the same language as the user's question.
 
-Dataset info: {dataset_info}
-
+Dataset: {dataset_info}
 Question: {question}
 Code: ```python
 {code}
 ```
 Output: {output}
 """
-
-# ── Complexity detection ──────────────────────────────────────────────────────
 
 _COMPLEX_KEYWORDS = frozenset({
     "train", "model", "predict", "eda", "profile", "explore",
@@ -83,28 +70,7 @@ _COMPLEX_KEYWORDS = frozenset({
 })
 
 
-def _is_complex(message: str) -> bool:
-    msg = message.lower()
-    return any(kw in msg for kw in _COMPLEX_KEYWORDS)
-
-
-# ── Dataset name generator ───────────────────────────────────────────────────
-
-def _generate_dataset_name(message: str, model_id: str | None = None) -> str:
-    try:
-        llm = get_llm(temperature=0.0, max_tokens=50, model_id=model_id)
-        reply = llm.invoke([HumanMessage(
-            content=(
-                f"Generate a short snake_case dataset name (max 5 words, no spaces) "
-                f"for: \"{message}\". Reply with ONLY the name."
-            )
-        )]).content.strip().replace(" ", "_").lower()
-        return re.sub(r"[^a-z0-9_]", "", reply)[:60] or "result_dataset"
-    except Exception:
-        return "result_dataset"
-
-
-# ── LLM code generation fallback ─────────────────────────────────────────────
+# ── Tier 3: One-shot sandbox exec ─────────────────────────────────────────────
 
 def _run_llm_codegen(
     message: str,
@@ -114,57 +80,69 @@ def _run_llm_codegen(
     history: list[ChatMessage],
     model_id: str | None,
     ctx: DataContext,
+    previous_error: str | None = None,
 ) -> HandlerResult:
-    """Fallback: use LLM to generate code, execute in sandbox."""
-    # Build context
+    """Tier 3 fallback: LLM generates code, executed in sandbox."""
     ctx_parts = [data_context(df, datasets[0].name)]
     for ds, (_, edf) in zip(datasets[1:], extra_dfs.items()):
         ctx_parts.append(data_context(edf, ds.name))
-    full_context = "\n\n---\n\n".join(ctx_parts)
-    system_prompt = DS_SYSTEM_CODEGEN.format(data_context=full_context)
+    full_ctx = "\n\n---\n\n".join(ctx_parts)
+    system = DS_SYSTEM_CODEGEN.format(data_context=full_ctx)
 
-    tokens = 2048 if _is_complex(message) else 1024
+    is_complex = any(kw in message.lower() for kw in _COMPLEX_KEYWORDS)
+    tokens = 2048 if is_complex else 1024
     llm = get_llm(temperature=0.0, max_tokens=tokens, model_id=model_id)
-    history_msgs = build_lc_history(history[-20:]) if history else []
+    hist = build_lc_history(history[-20:]) if history else []
 
-    msgs = [SystemMessage(content=system_prompt)] + history_msgs + [HumanMessage(content=message)]
+    # Include previous error if retrying
+    user_content = message
+    if previous_error:
+        user_content = f"{message}\n\n(Previous attempt failed: {previous_error}. Try a different approach.)"
+
+    msgs = [SystemMessage(content=system)] + hist + [HumanMessage(content=user_content)]
     step1_reply = llm.invoke(msgs).content
 
     code_blocks = extract_code_blocks(step1_reply)
     if not code_blocks:
-        return HandlerResult(success=True, stdout=step1_reply, summary=step1_reply)
+        return HandlerResult(success=True, stdout=step1_reply, summary=step1_reply,
+                             metadata={"tier": 3})
 
-    # Execute code
     all_code = "\n".join(code_blocks)
     stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(all_code, df, extra_dfs)
 
     # Auto-retry on error
     if stdout.startswith("Code execution error"):
-        log.info("  codegen: sandbox error — retrying")
-        fix_prompt = f"Error:\n{stdout}\n\nFix the code. Write ONE corrected Python code block."
-        retry_msgs = msgs + [AIMessage(content=step1_reply), HumanMessage(content=fix_prompt)]
-        retry_reply = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id).invoke(retry_msgs).content
+        log.info("  tier3: sandbox error — retrying")
+        fix_msgs = msgs + [AIMessage(content=step1_reply),
+                           HumanMessage(content=f"Error:\n{stdout}\n\nFix the code. ONE corrected block.")]
+        retry_reply = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id).invoke(fix_msgs).content
         retry_blocks = extract_code_blocks(retry_reply)
         if retry_blocks:
             stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(retry_blocks[0], df, extra_dfs)
             all_code = retry_blocks[0]
 
-    charts: list[str] = []
-    if chart_json:
-        charts.append(chart_json)
-
-    has_substantial_df = (result_df is not None and len(result_df) > 10 and len(result_df.columns) >= 3)
-    output_type = "generate" if has_substantial_df else "query"
-
+    charts = [chart_json] if chart_json else []
+    has_big_df = result_df is not None and len(result_df) > 10 and len(result_df.columns) >= 3
     return HandlerResult(
         success=not stdout.startswith("Code execution error"),
-        result_df=result_df,
-        charts_plotly=charts,
-        stdout=stdout,
-        output_type=output_type,
+        result_df=result_df, charts_plotly=charts, stdout=stdout,
+        output_type="generate" if has_big_df else "query",
         error=stdout if stdout.startswith("Code execution error") else None,
-        metadata={"code": all_code, "chart_image": chart_b64},
+        metadata={"code": all_code, "chart_image": chart_b64, "tier": 3},
     )
+
+
+# ── Dataset name generator ───────────────────────────────────────────────────
+
+def _generate_dataset_name(message: str, model_id: str | None = None) -> str:
+    try:
+        llm = get_llm(temperature=0.0, max_tokens=50, model_id=model_id)
+        reply = llm.invoke([HumanMessage(
+            content=f"Generate a short snake_case dataset name (max 5 words) for: \"{message}\". Reply ONLY the name."
+        )]).content.strip().replace(" ", "_").lower()
+        return re.sub(r"[^a-z0-9_]", "", reply)[:60] or "result_dataset"
+    except Exception:
+        return "result_dataset"
 
 
 # ── Main orchestrator ─────────────────────────────────────────────────────────
@@ -183,8 +161,7 @@ def run_datascience_agent(
     df = pd.DataFrame(primary.data)
     extra_dfs: dict[str, pd.DataFrame] = {}
     for ds in datasets[1:]:
-        var = sanitize_var_name(ds.name)
-        extra_dfs[var] = pd.DataFrame(ds.data)
+        extra_dfs[sanitize_var_name(ds.name)] = pd.DataFrame(ds.data)
 
     # Step 2: Analyze context
     ctx = analyze_context(df)
@@ -192,60 +169,98 @@ def run_datascience_agent(
 
     # Step 3: Classify intent
     intent = classify_intent(message, ctx, history)
-    log.info(
-        "  intent: %s/%s  confidence=%.2f  output=%s  fallback=%s",
-        intent.category, intent.sub_intent, intent.confidence,
-        intent.output_type, intent.fallback_to_custom,
-    )
+    log.info("  intent: %s/%s  conf=%.2f  output=%s  fallback=%s",
+             intent.category, intent.sub_intent, intent.confidence,
+             intent.output_type, intent.fallback_to_custom)
 
-    # Step 4: Route to handler or LLM codegen
+    result: HandlerResult | None = None
+
+    # ── TIER 1: Pre-built handler ─────────────────────────────────────────
     if intent.confidence >= 0.3 and not intent.fallback_to_custom:
         handler_fn = get_handler(intent.category, intent.sub_intent)
         if handler_fn:
-            log.info("  routing to handler: %s/%s", intent.category, intent.sub_intent)
+            log.info("  TIER 1: pre-built handler %s/%s", intent.category, intent.sub_intent)
             try:
                 result = handler_fn(df, intent.params)
+                if result:
+                    result.metadata["tier"] = 1
             except Exception as e:
-                log.error("  handler error: %s — falling back to codegen", e)
-                result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx)
-        else:
-            result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx)
-    else:
-        log.info("  routing to LLM codegen (low confidence or fallback)")
-        result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx)
+                log.error("  TIER 1 error: %s", e)
+                result = None
+
+    # ── TIER 2: Dynamic handler generation ────────────────────────────────
+    if result is None or not result.success:
+        log.info("  TIER 2: generating dynamic handler")
+        handler_name = generate_handler_name(message)
+        ctx_str = data_context(df, primary.name)
+
+        # Describe operation
+        try:
+            llm = get_llm(temperature=0.0, max_tokens=200, model_id=model_id)
+            desc_reply = llm.invoke([HumanMessage(
+                content=(
+                    f"Given request: \"{message}\"\n"
+                    f"Dataset columns: {ctx.column_list[:20]}\n"
+                    f"Describe in ONE sentence what pandas/numpy/plotly operation to perform."
+                )
+            )]).content.strip()
+        except Exception:
+            desc_reply = message
+
+        # Extract params
+        params = _extract_operation_params(message, df)
+
+        dynamic_fn = generate_handler(
+            operation_description=desc_reply,
+            handler_name=handler_name,
+            expected_params=params,
+            df_context=ctx_str,
+            llm=get_llm(temperature=0.0, max_tokens=1024, model_id=model_id),
+        )
+
+        if dynamic_fn is not None:
+            log.info("  TIER 2: executing dynamic handler '%s'", handler_name)
+            try:
+                result = dynamic_fn(df, params)
+                if result:
+                    result.metadata["tier"] = 2
+                    result.metadata["handler_name"] = handler_name
+            except Exception as e:
+                log.error("  TIER 2 exec error: %s", e)
+                result = None
+
+    # ── TIER 3: One-shot sandbox fallback ─────────────────────────────────
+    if result is None or not result.success:
+        log.info("  TIER 3: one-shot sandbox fallback")
+        prev_err = result.error if result else None
+        result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx, prev_err)
 
     # Step 5: Validate
     validation = validate_result(result, intent, df)
 
-    # Step 6: Retry if failed
+    # Step 6: Retry if validation failed
     if not validation.success and validation.retry_strategy == "fallback_to_custom":
-        log.info("  retrying with LLM codegen after handler failure")
-        result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx)
-        validation = validate_result(result, intent, df)
+        log.info("  validation failed — retrying via tier 3")
+        result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx, validation.errors[0] if validation.errors else None)
 
-    # Step 7: LLM interprets result (if we have stdout or data to explain)
-    if result.stdout and not result.stdout.startswith("Code execution error"):
+    # Step 7: LLM interpretation
+    final_text = result.summary or result.stdout or ""
+    if result.stdout and not result.stdout.startswith("Code execution error") and result.metadata.get("tier") == 3:
         try:
-            ds_info = f"{primary.name}: {ctx.shape[0]:,} rows, {ctx.shape[1]} cols → {ctx.column_list[:15]}"
-            interp_prompt = DS_SYSTEM_INTERPRET.format(
-                dataset_info=ds_info,
-                question=message,
-                code=result.metadata.get("code", "(handler execution)"),
+            ds_info = f"{primary.name}: {ctx.shape[0]:,} rows, {ctx.shape[1]} cols"
+            interp = DS_SYSTEM_INTERPRET.format(
+                dataset_info=ds_info, question=message,
+                code=result.metadata.get("code", "(handler)"),
                 output=result.stdout[:2000],
             )
-            history_msgs = build_lc_history(history[-20:]) if history else []
-            interp_msgs = [SystemMessage(content=interp_prompt)] + history_msgs + [
-                HumanMessage(content=f"Original question: {message}\nInterpret the result.")
+            hist_msgs = build_lc_history(history[-20:]) if history else []
+            interp_msgs = [SystemMessage(content=interp)] + hist_msgs + [
+                HumanMessage(content=f"Question: {message}\nInterpret the result.")
             ]
-            llm_interp = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
-            final_text = llm_interp.invoke(interp_msgs).content
+            final_text = get_llm(temperature=0.0, max_tokens=512, model_id=model_id).invoke(interp_msgs).content
         except Exception as e:
             log.error("  interpretation error: %s", e)
-            final_text = result.summary or result.stdout
-    else:
-        final_text = result.summary or result.stdout or result.error or "No output produced."
 
-    # Add warnings to response
     if validation.warnings:
         final_text += "\n\n**Warnings:** " + ", ".join(validation.warnings)
 
@@ -258,7 +273,6 @@ def run_datascience_agent(
     if result.charts_plotly:
         artifacts["chart_json"] = result.charts_plotly[0]
 
-    # Output routing
     output_type = result.output_type
     if output_type == "generate" and result.result_df is not None:
         rows_data = result.result_df.to_dict(orient="records")
@@ -271,9 +285,43 @@ def run_datascience_agent(
 
     artifacts["output_type"] = output_type
     artifacts["should_activate"] = False
+    artifacts["_debug_tier"] = result.metadata.get("tier", 0)
 
     log.info(
-        "━━ DS-Agent done  intent=%s/%s  output=%s  elapsed=%.1fs ━━",
-        intent.category, intent.sub_intent, output_type, time.perf_counter() - t0,
+        "━━ DS-Agent done  tier=%s  intent=%s/%s  output=%s  elapsed=%.1fs ━━",
+        result.metadata.get("tier"), intent.category, intent.sub_intent,
+        output_type, time.perf_counter() - t0,
     )
     return final_text, artifacts
+
+
+def _extract_operation_params(message: str, df: pd.DataFrame) -> dict:
+    """Extract concrete parameters from the user message."""
+    params: dict = {}
+    msg = message.lower()
+
+    # Percentage
+    import re as _re
+    pct = _re.search(r"(\d+(?:\.\d+)?)\s*(?:%|percent|pct|เปอร์เซ็นต์)", msg)
+    if pct:
+        params["fraction"] = float(pct.group(1)) / 100
+        params["value"] = float(pct.group(1))
+
+    # Integer N
+    n_match = _re.search(r"(?:top|first|last|window|n=)\s*(\d+)", msg)
+    if n_match:
+        params["n"] = int(n_match.group(1))
+
+    # Column match
+    for col in df.columns:
+        if col.lower() in msg or col in message:
+            params["column"] = col
+            break
+    if "column" not in params:
+        for word in msg.split():
+            match = BaseHandler.smart_column_match(df, word)
+            if match:
+                params["column"] = match
+                break
+
+    return params

@@ -40,6 +40,12 @@ app.include_router(models_router)
 app.include_router(prepare_router)
 app.include_router(suggest_router)
 
+# Debug routes — only in dev
+import os
+if os.environ.get("LOG_LEVEL", "info").lower() == "debug":
+    from api.routes.handlers_debug import router as debug_router
+    app.include_router(debug_router)
+
 
 @app.get("/health")
 async def health() -> dict:
