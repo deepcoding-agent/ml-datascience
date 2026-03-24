@@ -247,3 +247,107 @@ class CleanHandler(BaseHandler):
                                  summary=f"Changed '{col}' dtype to {dtype}")
         except Exception as e:
             return HandlerResult(success=False, error=f"Cannot convert '{col}' to {dtype}: {e}")
+
+    @staticmethod
+    def handle_fill_interpolate(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Fill nulls via interpolation — linear, ffill (forward), or bfill (backward)."""
+        method = params.get("method", "linear")
+        col = params.get("column")
+        result = df.copy()
+        before_nulls = int(result.isna().sum().sum())
+
+        if method == "ffill":
+            if col and col in result.columns:
+                result[col] = result[col].ffill()
+            else:
+                result = result.ffill()
+        elif method == "bfill":
+            if col and col in result.columns:
+                result[col] = result[col].bfill()
+            else:
+                result = result.bfill()
+        else:  # linear
+            num_cols = [col] if col and col in result.columns else result.select_dtypes(include="number").columns.tolist()
+            for c in num_cols:
+                result[c] = result[c].interpolate(method="linear")
+
+        after_nulls = int(result.isna().sum().sum())
+        filled = before_nulls - after_nulls
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Interpolated ({method}): filled {filled:,} nulls ({before_nulls:,} → {after_nulls:,})",
+        )
+
+    @staticmethod
+    def handle_remove_outliers(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Remove rows containing outlier values (IQR or z-score)."""
+        method = params.get("method", "iqr")
+        col = params.get("column")
+        result = df.copy()
+        cols = [col] if col and col in result.columns else result.select_dtypes(include="number").columns.tolist()
+        mask = pd.Series(True, index=result.index)
+
+        for c in cols:
+            if method == "zscore":
+                mean, std = result[c].mean(), result[c].std()
+                if std == 0:
+                    continue
+                z = ((result[c] - mean) / std).abs()
+                mask &= z <= 3
+            else:  # iqr
+                q1 = result[c].quantile(0.25)
+                q3 = result[c].quantile(0.75)
+                iqr = q3 - q1
+                mask &= (result[c] >= q1 - 1.5 * iqr) & (result[c] <= q3 + 1.5 * iqr)
+
+        before = len(result)
+        result = result[mask].reset_index(drop=True)
+        removed = before - len(result)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Removed {removed:,} outlier rows ({method.upper()}): {before:,} → {len(result):,}",
+        )
+
+    @staticmethod
+    def handle_lowercase_values(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Lowercase all string values in specified or all string columns."""
+        col = params.get("column")
+        result = df.copy()
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="object").columns.tolist()
+        for c in cols:
+            result[c] = result[c].str.lower()
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Lowercased values in {len(cols)} column(s): {cols}",
+        )
+
+    @staticmethod
+    def handle_map_values(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Map/recode values in a column using a mapping dict.
+
+        params: column, mapping (dict e.g. {"M": "Male", "F": "Female"})
+        """
+        col = params.get("column")
+        mapping = params.get("mapping", {})
+        if not col or col not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{col}' not found")
+        if not mapping:
+            return HandlerResult(success=False, error="No mapping provided")
+        result = df.copy()
+        result[col] = result[col].replace(mapping)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Mapped {len(mapping)} values in '{col}': {mapping}",
+        )
+
+    @staticmethod
+    def handle_reset_index(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Reset the DataFrame index to 0-based sequential."""
+        result = df.reset_index(drop=True)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Reset index (0 to {len(result)-1})",
+        )

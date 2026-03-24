@@ -44,7 +44,12 @@ HANDLER_CATALOG = """\
 | clean.lowercase_columns | normalize column names to snake_case | (none) |
 | clean.drop_constant | drop columns with all same values | (none) |
 | clean.clip_outliers | clip outliers (IQR or z-score) | column?, method? (iqr/zscore) |
+| clean.remove_outliers | remove rows with outlier values | column?, method? (iqr/zscore) |
 | clean.change_dtype | cast column to specific type | column, dtype (int/float/str/bool/datetime/category) |
+| clean.fill_interpolate | fill nulls via interpolation | column?, method? (linear/ffill/bfill) |
+| clean.lowercase_values | lowercase all string values | column? |
+| clean.map_values | recode/map values in a column | column, mapping (dict e.g. {"M":"Male"}) |
+| clean.reset_index | reset index to 0-based | (none) |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
