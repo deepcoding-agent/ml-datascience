@@ -15,11 +15,11 @@ class TransformHandler(BaseHandler):
 
     @staticmethod
     def handle_filter(df: pd.DataFrame, params: dict) -> HandlerResult:
-        col = params.get("column")
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
         op = params.get("operator", "==")
         val = params.get("value")
-        if not col or col not in df.columns:
-            return HandlerResult(success=False, error=f"Column '{col}' not found")
         if val is None:
             return HandlerResult(success=False, error="No filter value provided")
         ops = {"==": "eq", "!=": "ne", ">": "gt", "<": "lt", ">=": "ge", "<=": "le"}
@@ -35,10 +35,10 @@ class TransformHandler(BaseHandler):
 
     @staticmethod
     def handle_assign_value(df: pd.DataFrame, params: dict) -> HandlerResult:
-        col = params.get("column")
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
         val = params.get("value")
-        if not col or col not in df.columns:
-            return HandlerResult(success=False, error=f"Column '{col}' not found")
         if val is None:
             return HandlerResult(success=False, error="No value to assign")
         result = df.copy()
@@ -48,10 +48,10 @@ class TransformHandler(BaseHandler):
 
     @staticmethod
     def handle_sort(df: pd.DataFrame, params: dict) -> HandlerResult:
-        col = params.get("column")
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
         ascending = params.get("ascending", True)
-        if not col or col not in df.columns:
-            return HandlerResult(success=False, error=f"Column '{col}' not found")
         result = df.sort_values(col, ascending=ascending).reset_index(drop=True)
         order = "ascending" if ascending else "descending"
         return HandlerResult(success=True, result_df=result, output_type="generate",

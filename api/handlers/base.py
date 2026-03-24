@@ -143,5 +143,28 @@ class BaseHandler:
         return None
 
     @staticmethod
+    def require_column(df: pd.DataFrame, col: str | None, keyword: str = "") -> tuple[str | None, HandlerResult | None]:
+        """Validate that a column exists in df. Returns (col, None) if OK,
+        or (None, error_result) if column not found.
+
+        If col is None, tries smart_column_match on keyword.
+        If still not found, returns error listing actual columns.
+        """
+        if col and col in df.columns:
+            return col, None
+        # Try fuzzy match
+        if keyword:
+            useless = get_useless_columns(df)
+            matched = BaseHandler.smart_column_match(df, keyword, exclude=useless)
+            if matched:
+                return matched, None
+        available = [c for c in df.columns if c not in get_useless_columns(df)]
+        name = col or keyword or "?"
+        return None, HandlerResult(
+            success=False,
+            error=f"Column '{name}' not found. Available columns: {available}",
+        )
+
+    @staticmethod
     def safe_copy(df: pd.DataFrame) -> pd.DataFrame:
         return df.copy()
