@@ -171,6 +171,40 @@ def _find_handler(handler_name: str, category: str | None):
     return None
 
 
+def _format_bin_label(interval) -> str:
+    """Convert a pandas Interval to a human-readable string like '34K – 154K'."""
+    def _fmt(n: float) -> str:
+        if abs(n) >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if abs(n) >= 1_000:
+            return f"{int(n / 1_000)}K"
+        return f"{n:.0f}"
+
+    return f"{_fmt(interval.left)} – {_fmt(interval.right)}"
+
+
+def _looks_like_range(series: pd.Series) -> bool:
+    """Return True if a Series contains interval/range-style labels."""
+    if series.empty:
+        return False
+    sample = str(series.iloc[0])
+    return ("(" in sample or "[" in sample) and "," in sample
+
+
+def _clean_chart_title(description: str) -> str:
+    """Derive a clean chart title from a step description."""
+    # Strip common code-style prefixes
+    for prefix in ("Use pd.cut to ", "Calculate ", "Compute ", "Generate ", "Create "):
+        if description.startswith(prefix):
+            description = description[len(prefix):]
+            break
+    # Capitalise first letter, cap length
+    title = description[:60].strip().rstrip(".")
+    if title:
+        title = title[0].upper() + title[1:]
+    return title or "Distribution"
+
+
 def _auto_visualize(
     df: pd.DataFrame,
     viz_type: str,
@@ -181,48 +215,59 @@ def _auto_visualize(
         if df is None or df.empty or len(df.columns) < 1:
             return None
 
-        cols = list(df.columns)
+        plot_df = df.copy()
+        cols = list(plot_df.columns)
+        title = _clean_chart_title(title)
 
         # Detect x and y columns
         if len(cols) == 2:
             x_col, y_col = cols[0], cols[1]
         elif len(cols) >= 2:
-            numeric = df.select_dtypes(include="number").columns.tolist()
+            numeric = plot_df.select_dtypes(include="number").columns.tolist()
             non_numeric = [c for c in cols if c not in numeric]
             x_col = non_numeric[0] if non_numeric else cols[0]
             y_col = numeric[0] if numeric else cols[1]
         else:
-            # Single column
             x_col = cols[0]
             y_col = cols[0]
             viz_type = "histogram"
 
-        n_unique = df[x_col].nunique() if x_col in df.columns else 10
+        # Format interval/range labels to human-readable strings
+        is_range = _looks_like_range(plot_df[x_col])
+        if is_range:
+            try:
+                plot_df[x_col] = plot_df[x_col].apply(
+                    lambda v: _format_bin_label(v) if hasattr(v, "left") else str(v)
+                )
+            except Exception:
+                plot_df[x_col] = plot_df[x_col].astype(str)
+
+        n_unique = plot_df[x_col].nunique() if x_col in plot_df.columns else 10
 
         # Auto-select best viz type if pie requested but too many categories
         if viz_type == "pie" and n_unique > 10:
             viz_type = "bar"
 
         if viz_type == "pie":
-            fig = px.pie(df, names=x_col, values=y_col, title=title)
+            fig = px.pie(plot_df, names=x_col, values=y_col, title=title)
             fig.update_traces(
                 textposition="inside",
                 textinfo="percent+label",
                 hovertemplate="<b>%{label}</b><br>Value: %{value}<br>%{percent}",
             )
         elif viz_type == "histogram":
-            fig = px.histogram(df, x=x_col, title=title)
+            fig = px.histogram(plot_df, x=x_col, title=title)
         elif viz_type == "scatter":
-            fig = px.scatter(df, x=x_col, y=y_col, title=title)
+            fig = px.scatter(plot_df, x=x_col, y=y_col, title=title)
         elif viz_type == "line":
-            fig = px.line(df, x=x_col, y=y_col, title=title)
+            fig = px.line(plot_df, x=x_col, y=y_col, title=title)
         elif viz_type == "box":
-            fig = px.box(df, y=y_col, title=title)
+            fig = px.box(plot_df, y=y_col, title=title)
         elif viz_type == "heatmap":
-            num_cols = df.select_dtypes(include="number").columns.tolist()
+            num_cols = plot_df.select_dtypes(include="number").columns.tolist()
             if len(num_cols) >= 2:
                 fig = px.imshow(
-                    df[num_cols].corr().round(2),
+                    plot_df[num_cols].corr().round(2),
                     text_auto=".2f",
                     title=title,
                 )
@@ -230,16 +275,23 @@ def _auto_visualize(
                 return None
         else:
             # Default bar
-            df_sorted = df.sort_values(y_col, ascending=False) if y_col != x_col else df
-            fig = px.bar(df_sorted, x=x_col, y=y_col, title=title, text=y_col)
-            fig.update_traces(texttemplate="%{text}", textposition="outside")
+            fig = px.bar(plot_df, x=x_col, y=y_col, title=title, text=y_col)
+            fig.update_traces(
+                texttemplate="%{text:,}",
+                textposition="outside",
+                marker_color="#FB8C3C",
+            )
 
+        # Common layout — horizontal tick labels, thousands separators
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font=dict(family="Inter, Noto Sans Thai, Tahoma, sans-serif", size=13),
-            margin=dict(l=40, r=20, t=50, b=40),
+            xaxis=dict(tickangle=0, tickfont=dict(size=12)),
+            yaxis=dict(tickformat=","),
+            bargap=0.3,
+            margin=dict(l=40, r=20, t=50, b=80),
         )
 
         return pio.to_json(fig)

@@ -55,17 +55,41 @@ If injecting nulls:
     print(f"Null percentage: {{result.isnull().mean().mean()*100:.1f}}%")
 
 If binning/splitting:
-    bins = pd.cut(df['ColumnName'], bins=N)
+    def _fmt_num(n):
+        if abs(n) >= 1_000_000: return f"{{n/1_000_000:.1f}}M"
+        if abs(n) >= 1_000:     return f"{{int(n/1_000)}}K"
+        return f"{{n:.0f}}"
+
+    def _fmt_bin(iv):
+        return f"{{_fmt_num(iv.left)}} – {{_fmt_num(iv.right)}}"
+
+    col_name = 'ColumnName'  # use the actual column
+    bins = pd.cut(df[col_name], bins=N)
     counts = bins.value_counts().sort_index()
-    labels = [str(x) for x in counts.index]  # MUST convert to str
+    labels = [_fmt_bin(b) for b in counts.index]  # human-readable "34K – 154K"
     pcts = (counts / counts.sum() * 100).round(2)
     result = pd.DataFrame({{'Range': labels, 'Count': counts.values, 'Percentage': pcts.values}})
     print(result.to_string(index=False))
 
+    # Chart with formatted labels
+    import plotly.express as px
+    fig = px.bar(result, x='Range', y='Count', title=f'{{col_name}} Distribution',
+                 text='Count')
+    fig.update_traces(texttemplate='%{{text:,}}', textposition='outside',
+                      marker_color='#FB8C3C')
+    fig.update_layout(
+        template='plotly_white',
+        xaxis=dict(tickangle=0, tickfont=dict(size=12)),
+        yaxis=dict(title='Count', tickformat=','),
+        bargap=0.3,
+    )
+
 If generating chart:
     import plotly.express as px
-    fig = px.chart_type(df, x='col', y='col', title='...')
+    fig = px.chart_type(df, x='col', y='col', title='Column Distribution')
     fig.update_layout(template="plotly_white")
+    # CHART TITLE RULE: Never use internal step description as title.
+    # Use the actual column name: f"{{col_name}} Distribution"
 
 ## OUTPUT
 Return ONLY executable Python code. No markdown, no explanation.
