@@ -54,6 +54,53 @@ _PERCENT_KEYWORDS = frozenset({
 })
 
 
+# ── Auto-chart triggers for stats responses ───────────────────────────────────
+
+AUTO_CHART_TRIGGERS = frozenset({
+    "percent", "percentage", "เปอร์เซ็น", "ร้อยละ", "สัดส่วน",
+    "กี่ percent", "กี่เปอร์เซ็น", "คิดเป็น",
+    "how many", "count", "how much", "จำนวน", "กี่", "มีกี่",
+    "each", "แต่ละ", "แต่ละแบบ", "แต่ละประเภท",
+    "distribution", "breakdown", "proportion", "การกระจาย", "แจกแจง",
+})
+
+
+def should_auto_chart(message: str) -> bool:
+    """Return True if the response should include a chart alongside text."""
+    msg = message.lower()
+    return any(t in msg for t in AUTO_CHART_TRIGGERS)
+
+
+def _auto_chart_from_result(df: pd.DataFrame, col: str) -> str | None:
+    """Generate a chart for a categorical column breakdown. Returns plotly JSON or None."""
+    import plotly.express as px
+    import plotly.io as pio
+
+    if col not in df.columns:
+        return None
+
+    counts = df[col].value_counts().reset_index()
+    counts.columns = [col, "count"]
+    counts["pct"] = (counts["count"] / counts["count"].sum() * 100).round(2)
+    n_cats = len(counts)
+
+    if n_cats <= 8:
+        fig = px.pie(counts, names=col, values="count",
+                     title=f"{col} Distribution (%)", hole=0.3,
+                     hover_data={"pct": ":.2f"})
+        fig.update_traces(textposition="inside", textinfo="percent+label")
+        fig.update_layout(uniformtext_minsize=11, uniformtext_mode="hide")
+    else:
+        counts_sorted = counts.sort_values("pct", ascending=True)
+        fig = px.bar(counts_sorted, x="pct", y=col, orientation="h",
+                     title=f"{col} Distribution (%)", text="pct",
+                     labels={"pct": "Percentage (%)"})
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+
+    fig.update_layout(template="plotly_white")
+    return pio.to_json(fig)
+
+
 def detect_explicit_chart_type(message: str) -> str | None:
     """Check if the user explicitly named a chart type. Returns type or None."""
     msg = message.lower().replace(" ", "")
@@ -367,6 +414,20 @@ def run_datascience_agent(
         artifacts["chart_image"] = result.metadata["chart_image"]
     if result.charts_plotly:
         artifacts["chart_json"] = result.charts_plotly[0]
+
+    # Auto-chart: add chart to stats responses with categorical breakdown
+    if (not result.charts_plotly
+            and "chart_json" not in artifacts
+            and should_auto_chart(translated_msg)
+            and result.result_df is not None
+            and result.output_type == "query"):
+        # Find the categorical column from params or result
+        auto_col = intent.params.get("column")
+        if auto_col and auto_col in df.columns:
+            chart_json = _auto_chart_from_result(df, auto_col)
+            if chart_json:
+                artifacts["chart_json"] = chart_json
+                log.info("  auto-chart: added chart for '%s'", auto_col)
 
     output_type = result.output_type
     if output_type == "generate" and result.result_df is not None:
