@@ -216,3 +216,33 @@ def extract_params(message: str, sub_intent: str, ctx: DataContext) -> dict:
         params["scaler"] = "standard"
 
     return params
+
+
+# ── Thai → English mapping for handler name generation ────────────────────────
+
+_THAI_TO_EN = {
+    "สร้าง": "create", "ลบ": "remove", "เพิ่ม": "add", "แสดง": "show",
+    "คำนวณ": "calculate", "เปลี่ยน": "change", "กรอง": "filter",
+    "จัดเรียง": "sort", "รวม": "merge", "แบ่ง": "split",
+    "ทำความสะอาด": "clean", "ข้อมูล": "data", "ชุดข้อมูล": "dataset",
+    "แทรก": "inject", "ประมาณ": "approx", "ทุก": "all", "ใหม่": "new",
+    "แบบสุ่ม": "random",
+}
+
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "to", "of", "for", "in", "on", "at",
+    "is", "are", "with", "and", "or", "i", "me", "my",
+    "can", "you", "do", "it", "that", "this", "into",
+})
+
+
+def generate_handler_name(message: str) -> str:
+    """Convert user message to a valid snake_case handler name."""
+    msg = message.lower()
+    for thai, en in _THAI_TO_EN.items():
+        msg = msg.replace(thai, en)
+    words = re.findall(r"[a-zA-Z0-9]+", msg)
+    words = [w for w in words if w not in _STOP_WORDS][:5]
+    if not words:
+        return "custom_operation"
+    return "_".join(words)[:50]
