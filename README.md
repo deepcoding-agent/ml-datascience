@@ -1,6 +1,6 @@
-# ml-datascience — DS-Agent FastAPI Backend
+# ml-datascience — PrepPilot FastAPI Backend
 
-FastAPI service that powers the PrepPilot chat interface. Receives messages and dataset payloads from the web app, runs a multi-step LLM pipeline, executes generated Python code in a sandboxed environment, and returns text answers, charts, result datasets, and ML preparation reports.
+FastAPI service that powers the PrepPilot chat interface. Receives messages and dataset payloads from the web app, runs a multi-step Anthropic Claude LLM pipeline, executes generated Python code in a sandboxed environment, and returns text answers, interactive Plotly charts, result datasets, EDA reports, and ML preparation reports.
 
 ---
 
@@ -26,28 +26,30 @@ FastAPI service that powers the PrepPilot chat interface. Receives messages and 
 ```
 Web App (Next.js :3000)
         │
-        │  POST /chat        →  DS-Agent or Coding Agent
-        │  POST /prepare     →  Data Preparation Pipeline
+        │  POST /chat           →  DS-Agent or Coding Agent
+        │  POST /prepare       →  Data Preparation Pipeline (with PrepConfig)
+        │  POST /eda-report    →  Structured EDA with auto-charts
         │  POST /suggest-target → LLM target column suggester
-        │  GET  /health      →  {"status": "ok"}
+        │  GET  /health        →  {"status": "ok"}
         ▼
 DS-Agent API (FastAPI :8000)
         │
         ├── api/main.py          Entry point — registers routers, CORS, loads .env
         ├── api/models.py        Pydantic request/response models
-        ├── api/llm.py           Cached ChatOpenAI factory (lru_cache)
+        ├── api/llm.py           Cached ChatAnthropic factory (lru_cache, max_tokens)
         ├── api/context.py       Dataset → LLM context string builder
         ├── api/sandbox.py       Python exec() sandbox (stdout + chart capture)
         ├── api/logger.py        Centralized structured logger → stderr
         │
         ├── api/routes/
-        │   ├── chat.py          POST /chat
-        │   ├── prepare.py       POST /prepare
+        │   ├── chat.py          POST /chat (extracts output_type/should_activate)
+        │   ├── prepare.py       POST /prepare (accepts PrepConfig)
+        │   ├── eda_report.py    POST /eda-report (structured EDA + charts)
         │   └── suggest_target.py POST /suggest-target
         │
         ├── api/agents/
-        │   ├── datascience.py   DS-Agent: 2-step LLM + sandbox pipeline
-        │   └── coding.py        Coding agent: general Q&A (no dataset)
+        │   ├── datascience.py   DS-Agent: full-capability (10 tasks, 18+ charts, auto-retry)
+        │   └── coding.py        Coding agent: concise Q&A (no dataset, max_tokens=1024)
         │
         └── api/data_preparation_agent.py  Full ML data prep pipeline
 ```
@@ -94,11 +96,8 @@ ml-datascience/
 │       ├── chat.py               ← POST /chat
 │       ├── prepare.py            ← POST /prepare
 │       └── suggest_target.py     ← POST /suggest-target
-├── ai_data_science_team/         ← local LangChain agent library
-├── apps/                         ← standalone Streamlit demo apps
-├── data/                         ← sample datasets
 ├── requirements.txt
-├── setup.py
+├── Dockerfile
 └── start.sh                      ← foreground server launcher
 ```
 
@@ -109,7 +108,7 @@ ml-datascience/
 ### Prerequisites
 
 - Python 3.10+
-- OpenAI API key
+- Anthropic API key
 
 ### Install
 
@@ -118,7 +117,6 @@ cd ml-datascience
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ### Configure
@@ -130,9 +128,9 @@ cp api/.env.example api/.env
 Edit `api/.env`:
 
 ```env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini    # optional — default is gpt-4o-mini
-LOG_LEVEL=info              # optional — debug | info | warning | error
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-4-6   # optional — default is claude-sonnet-4-6
+LOG_LEVEL=info                      # optional — debug | info | warning | error
 ```
 
 ---
@@ -213,7 +211,7 @@ Routes to the data-science agent (datasets present) or coding agent (no datasets
 ```
 
 **Notes:**
-- `conversation_history` — up to last 6 messages are injected for context
+- `conversation_history` — up to last 20 messages are injected for context
 - Multiple datasets can be passed; secondary datasets are available in the sandbox by their sanitized name (e.g. `sales_data.csv` → `sales_data`)
 - `datasets` empty → coding agent (no sandbox, no artifacts)
 
@@ -278,7 +276,7 @@ Runs the ML data preparation pipeline on a dataset.
 
 ### `POST /suggest-target`
 
-Uses GPT to identify the most appropriate ML target column from a list of column names and optional sample data.
+Uses LLM to identify the most appropriate ML target column from a list of column names and optional sample data.
 
 **Request:**
 
@@ -327,21 +325,27 @@ Auto-generated Swagger UI. Explore and test all endpoints interactively.
 **Step 1 — Data context injection**
 
 Before calling the LLM, `context.py` builds a rich string from the dataset:
-- Shape (`rows × columns`)
-- Column names and dtypes
-- First 10 rows as a markdown table
-- Descriptive statistics for all numeric columns
-- Top-5 value counts for up to 8 categorical columns
+- Shape (`rows × columns`), memory usage, duplicate row count
+- Per-column info: dtype, null%, unique count
+- First 5 rows + last 3 rows as markdown tables
+- Descriptive statistics + skewness for all numeric columns
+- Top-5 value counts for up to 10 categorical columns
 
 **Step 2 — LLM generates answer / code** (`temperature=0.0`)
 
-ChatOpenAI receives: system prompt with data context + last 6 chat history messages + user message.
+ChatAnthropic receives: system prompt with data context + last 20 chat history messages + user message. Dynamic `max_tokens`: 2048 for complex tasks (train, EDA, model), 1024 for simple.
 
-The system prompt enforces strict coding rules:
-- Always assign results to `result = df.xxx` before printing
-- Never modify `df` directly — use `result = df.copy()`
-- Use `plt.show()` for charts (captured automatically)
-- Generate colors dynamically to match the number of data points
+The system prompt covers 10 task categories:
+1. Data exploration & profiling
+2. Data viewing (head/tail/sample)
+3. Statistics & aggregation
+4. Data cleaning & wrangling (smart: skewed→median, normal→mean)
+5. Outlier detection (IQR/z-score)
+6. Feature engineering (one-hot, label encode, log transform, binning)
+7. Correlation & feature selection
+8. Model training (multi-model comparison)
+9. Statistical testing (t-test, chi-square, ANOVA)
+10. Time series analysis
 
 **Step 3 — Sandbox execution**
 
@@ -349,20 +353,20 @@ All `python` fenced code blocks are extracted and executed (see §8).
 
 **Step 4 — LLM interprets results** (`temperature=0.0`)
 
-A second LLM call receives the question, the code, and the actual stdout output. Returns a structured natural language answer with a Summary section.
+A second LLM call (`max_tokens=512`) receives the question, code, stdout output, dataset metadata, and conversation history. Returns a concise answer. If the first code execution fails, an auto-retry sends the error back to the LLM for one fix attempt.
 
 **Step 5 — Intent classification and artifact assembly**
 
 | Intent Keywords | Artifact produced |
 |---|---|
-| `plot`, `chart`, `graph`, `histogram`, `scatter`, `bar`, `line`, `pie`, `heatmap`, `visualize`, ... | `chart_image` |
+| `plot`, `chart`, `graph`, `histogram`, `scatter`, `bar`, `line`, `pie`, `heatmap`, `visualize`, ... | `chart_json` (Plotly) or `chart_image` (PNG fallback) |
 | `generate`, `create`, `add`, `modify`, `transform`, `filter`, `clean`, `encode`, `normalize`, ... | `data_wrangled` + `dataset_name` + `dataset_shape` |
 | `show`, `display`, `view`, `head`, `tail`, `first`, `last`, `preview`, `sample`, ... | `inline_table` |
 | `how many`, `count`, `average`, `mean`, `sum`, `top`, `breakdown`, ... | `inline_table` |
 
 ### Coding Agent (`agents/coding.py`)
 
-No dataset. Single ChatOpenAI call (`temperature=0.3`). Answers general coding and data science questions with explanation, code examples, and a one-sentence summary.
+No dataset. Single ChatAnthropic call (`temperature=0.3`, `max_tokens=1024`). Answers general coding and data science questions concisely with code examples.
 
 ---
 
