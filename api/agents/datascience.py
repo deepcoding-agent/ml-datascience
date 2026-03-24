@@ -134,6 +134,13 @@ RULES:
   Available: px, go, make_subplots, ff, sns, msno.
 - NULL INJECTION: "inject null"/"add null"/"แทรก null" → df_new = df.copy(),
   randomly set X% to NaN. result = df_new. output_type = "generate".
+- BIN / SPLIT / LEVEL: When user says "split into N levels/bins/groups/range/tier":
+  Use pd.cut(df['col'], bins=N) NOT value_counts().
+  Show actual range in labels. Sort by range order.
+  Example: bins = pd.cut(df['SalePrice'], bins=5); counts = bins.value_counts().sort_index()
+  fig = px.bar(x=[str(i) for i in counts.index], y=counts.values, title='Price by Level')
+- MULTI-STEP: If request has "and visualization", "then plot", etc., do ALL steps:
+  first transform/compute, then visualize the result. Never skip the viz step.
 
 {data_context}
 """
@@ -156,6 +163,29 @@ _COMPLEX_KEYWORDS = frozenset({
     "pipeline", "feature engineering", "hypothesis", "test",
     "compare models", "cross validation", "confusion matrix",
 })
+
+# ── Complex / multi-step request detection ────────────────────────────────────
+
+_COMPLEX_PATTERNS = [
+    # Multi-step conjunctions
+    "and visualization", "and plot", "and show", "and chart",
+    "then", "after that", "แล้ว", "จากนั้น",
+    # Binning / splitting
+    "split", "bin", "level", "range", "group into", "tier",
+    "แบ่ง", "ระดับ", "ช่วง", "จัดกลุ่ม",
+    # Combined operations
+    "per", "by each", "for each", "แต่ละ",
+    "compare", "vs", "cumulative",
+    # Math expressions
+    "multiply", "divide", "calculate", "คำนวณ",
+]
+
+
+def _is_complex_request(message: str) -> bool:
+    """Detect multi-step or advanced requests that need LLM codegen."""
+    msg = message.lower()
+    matches = [p for p in _COMPLEX_PATTERNS if p in msg]
+    return len(matches) >= 1
 
 
 # ── Tier 3: One-shot sandbox exec ─────────────────────────────────────────────
@@ -265,8 +295,13 @@ def run_datascience_agent(
     result: HandlerResult | None = None
     intent = IntentResult()  # default, overwritten below
 
-    # Step 4: Visualization fast-path — skip intent classification
-    if has_visualization_intent(translated_msg):
+    # Step 4: Complex request → skip fast-path, go straight to codegen
+    is_complex = _is_complex_request(translated_msg)
+    if is_complex:
+        log.info("  complex request detected — routing to LLM codegen")
+
+    # Step 4b: Visualization fast-path (only for SIMPLE viz requests)
+    if has_visualization_intent(translated_msg) and not is_complex:
         log.info("  viz fast-path triggered")
         # Find target column via fuzzy match on translated message
         target_col = None
@@ -309,7 +344,7 @@ def run_datascience_agent(
             log.info("  viz: no target column found, falling through")
 
     # Step 5: Classify intent (if not already resolved by viz fast-path)
-    if not (has_visualization_intent(translated_msg) and result is not None and result.success):
+    if not (has_visualization_intent(translated_msg) and not is_complex and result is not None and result.success):
         intent = classify_intent(translated_msg, ctx, history)
         log.info("  intent: %s/%s  conf=%.2f  output=%s  fallback=%s",
                  intent.category, intent.sub_intent, intent.confidence,
@@ -317,8 +352,14 @@ def run_datascience_agent(
 
     result_resolved = result is not None and result.success
 
-    # ── TIER 1: Pre-built handler ─────────────────────────────────────────
-    if not result_resolved and intent.confidence >= 0.3 and not intent.fallback_to_custom:
+    # ── Complex requests → skip Tier 1, go to codegen ─────────────────────
+    if is_complex and not result_resolved:
+        log.info("  complex → skipping Tier 1, using LLM codegen")
+        result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx)
+        result_resolved = result is not None and result.success
+
+    # ── TIER 1: Pre-built handler (simple requests only) ──────────────────
+    if not result_resolved and not is_complex and intent.confidence >= 0.3 and not intent.fallback_to_custom:
         handler_fn = get_handler(intent.category, intent.sub_intent)
         if handler_fn:
             log.info("  TIER 1: pre-built handler %s/%s", intent.category, intent.sub_intent)
