@@ -1,6 +1,6 @@
 # ml-datascience — PrepPilot FastAPI Backend
 
-FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 55 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
+FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 101 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
 
 ---
 
@@ -12,7 +12,7 @@ FastAPI service powering the PrepPilot AI data science platform. Features an **A
 4. [Setup](#4-setup)
 5. [Running the Server](#5-running-the-server)
 6. [API Reference](#6-api-reference)
-7. [Handler Registry](#7-handler-registry)
+7. [Handler Registry](#7-handler-registry) · [Full Reference →](docs/handler-feature.md)
 8. [Data Preparation Pipeline](#8-data-preparation-pipeline)
 9. [Code Execution Sandbox](#9-code-execution-sandbox)
 10. [Thai Language Support](#10-thai-language-support)
@@ -53,13 +53,13 @@ DS-Agent API (FastAPI :8000)
         │   └── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
         │
         ├── api/handlers/
-        │   ├── __init__.py          55-entry HANDLER_REGISTRY
+        │   ├── __init__.py          101-entry HANDLER_REGISTRY
         │   ├── base.py              HandlerResult dataclass, BaseHandler utilities, Thai keywords
-        │   ├── stats_handler.py     10 functions (describe, shape, nulls, value_counts, etc.)
-        │   ├── clean_handler.py     8 functions (drop/fill nulls, remove dupes, fix dtypes, etc.)
-        │   ├── transform_handler.py 14 functions (filter, sort, groupby, encode, scale, etc.)
-        │   ├── viz_handler.py       17 Plotly chart types (bar, scatter, pie, heatmap, etc.)
-        │   └── feature_handler.py   6 functions (importance, PCA, correlation filter, etc.)
+        │   ├── stats_handler.py     18 stats functions (describe, correlation, normality_test, etc.)
+        │   ├── clean_handler.py     20 cleaning functions (fill nulls, clip outliers, map values, etc.)
+        │   ├── transform_handler.py 26 transform functions (filter, pivot, melt, rolling, etc.)
+        │   ├── viz_handler.py       22 Plotly chart types (bar, scatter, qq_plot, density, etc.)
+        │   └── feature_handler.py   15 feature engineering functions (PCA, mutual_info, etc.)
         │
         ├── api/routes/
         │   ├── chat.py              POST /chat — routes to DS-Agent or Coding Agent
@@ -85,7 +85,7 @@ POST /chat
  │            ├── Check for greeting (trivial shortcut, no AI needed)
  │            │
  │            ├── AI PLANNER (sole decision-maker)
- │            │     ↓ LLM sees full handler catalog (55 handlers with IDs + params)
+ │            │     ↓ LLM sees full handler catalog (101 handlers with IDs + params)
  │            │     ↓ Outputs JSON plan: each step has handler:{id, params} OR codegen:{task}
  │            │     ↓ No hardcoded keywords, no regex — AI decides everything
  │            │
@@ -113,7 +113,7 @@ The DS-Agent uses a fully AI-driven architecture where the **LLM planner is the 
 
 ### AI Planner
 
-The planner receives the user message, dataset context, and a **complete handler catalog** (all 55 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
+The planner receives the user message, dataset context, and a **complete handler catalog** (all 101 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
 
 - **`handler`** — `{id: "category.sub", params: {...}}` → instant execution via pre-built handler
 - **`codegen`** — `{task: "description", produces: "dataframe|chart|text"}` → LLM generates Python code
@@ -167,11 +167,11 @@ ml-datascience/
 │   ├── handlers/
 │   │   ├── __init__.py               ← HANDLER_REGISTRY (55 entries)
 │   │   ├── base.py                   ← HandlerResult, BaseHandler, Thai keywords
-│   │   ├── stats_handler.py          ← 10 stats functions
-│   │   ├── clean_handler.py          ← 8 cleaning functions
-│   │   ├── transform_handler.py      ← 14 transform functions
-│   │   ├── viz_handler.py            ← 17 Plotly chart types
-│   │   └── feature_handler.py        ← 6 feature engineering functions
+│   │   ├── stats_handler.py          ← 18 stats functions
+│   │   ├── clean_handler.py          ← 20 cleaning functions
+│   │   ├── transform_handler.py      ← 26 transform functions
+│   │   ├── viz_handler.py            ← 22 Plotly chart types
+│   │   └── feature_handler.py        ← 15 feature engineering functions
 │   │
 │   └── routes/
 │       ├── chat.py                   ← POST /chat
@@ -410,24 +410,26 @@ Returns available LLM models with provider detection based on configured API key
 
 ## 7. Handler Registry
 
-55 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
+101 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
 
-### Stats (10 handlers)
-`stats.describe`, `stats.shape`, `stats.null_report`, `stats.value_counts`, `stats.unique_values`, `stats.dtypes`, `stats.correlation`, `stats.skewness`, `stats.outlier_report`, `stats.duplicate_report`
+For the complete reference with all parameters, see **[docs/handler-feature.md](docs/handler-feature.md)**.
 
-### Clean (8 handlers)
-`clean.drop_nulls`, `clean.fill_nulls`, `clean.remove_duplicates`, `clean.fix_dtypes`, `clean.rename_column`, `clean.drop_column`, `clean.strip_whitespace`
+### Stats (18 handlers)
+`describe`, `shape`, `null_report`, `dtypes`, `value_counts`, `unique_values`, `correlation`, `top_correlations`, `cross_tab`, `class_balance`, `normality_test`, `skewness`, `kurtosis`, `percentile`, `outlier_report`, `duplicate_report`, `zero_report`, `cardinality_report`
 
-### Transform (14 handlers)
-`transform.filter`, `transform.assign_value`, `transform.sort`, `transform.groupby_agg`, `transform.encode_label`, `transform.encode_onehot`, `transform.scale_minmax`, `transform.scale_standard`, `transform.inject_null`, `transform.sample_rows`, `transform.head`, `transform.tail`
+### Clean (20 handlers)
+`fill_nulls`, `fill_with_value`, `fill_interpolate`, `drop_nulls`, `remove_duplicates`, `deduplicate_by`, `drop_constant`, `clip_outliers`, `remove_outliers`, `drop_column`, `drop_id_columns`, `rename_column`, `lowercase_columns`, `reset_index`, `fix_dtypes`, `change_dtype`, `replace_values`, `map_values`, `lowercase_values`, `strip_whitespace`
 
-### Visualization (17 handlers)
-`viz.bar_chart`, `viz.histogram`, `viz.scatter`, `viz.line_chart`, `viz.box_plot`, `viz.violin_plot`, `viz.heatmap`, `viz.pie_chart`, `viz.pairplot`, `viz.count_plot`, `viz.distribution`
+### Transform (26 handlers)
+`filter`, `sort`, `nlargest`, `nsmallest`, `head`, `tail`, `sample_rows`, `pivot`, `melt`, `groupby_agg`, `rank`, `cumulative`, `rolling`, `round_values`, `add_column`, `assign_value`, `split_column`, `concat_columns`, `encode_label`, `encode_onehot`, `scale_standard`, `scale_minmax`, `scale_robust`, `bin_column`, `qcut`, `inject_null`
 
-All charts are Plotly-first (interactive JSON). Pie charts auto-group into top N + "Other" with percentages.
+### Visualization (22 handlers)
+`bar_chart`, `stacked_bar`, `histogram`, `pie_chart`, `count_plot`, `line_chart`, `area_chart`, `scatter`, `distribution`, `density_plot`, `box_plot`, `violin_plot`, `strip_plot`, `qq_plot`, `heatmap`, `pairplot`, `parallel_coords`, `bubble_chart`, `treemap`, `sunburst`, `missing_heatmap`, `time_series`
 
-### Feature Engineering (6 handlers)
-`feature.feature_importance`, `feature.pca`, `feature.correlation_filter`, `feature.log_transform`
+All charts use a unified minimal Plotly theme — `plotly_white`, `#FB8C3C` accent, Inter font, transparent background.
+
+### Feature Engineering (15 handlers)
+`feature_importance`, `mutual_info`, `select_k_best`, `pca`, `correlation_filter`, `variance_filter`, `log_transform`, `sqrt_transform`, `power_transform`, `target_encode`, `frequency_encode`, `cyclical_encode`, `datetime_features`, `ratio_features`, `polynomial_features`
 
 ---
 
