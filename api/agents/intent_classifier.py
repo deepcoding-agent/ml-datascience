@@ -28,7 +28,7 @@ INTENT_TREE: dict[str, dict[str, list[str]]] = {
     "stats": {
         "describe":         ["describe", "summary", "info", "overview", "statistics", "สรุป"],
         "shape":            ["how many rows", "shape", "size", "dimension", "rows and col", "กี่แถว"],
-        "null_report":      ["null", "missing", "nan", "na value", "empty", "ค่าว่าง"],
+        "null_report":      ["null", "missing", "nan", "na value", "empty", "how many null", "count null", "ค่าว่าง"],
         "value_counts":     ["how many", "count of", "frequency", "distribution of", "นับ", "จำนวน"],
         "correlation":      ["correlation", "corr", "relationship between", "สหสัมพันธ์"],
         "outlier_report":   ["outlier", "anomaly", "extreme value", "ค่าผิดปกติ"],
