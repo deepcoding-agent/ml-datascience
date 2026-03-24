@@ -59,15 +59,17 @@ def execute_plan(
                 log.info("    handler: %s/%s", handler_category, use_handler)
                 try:
                     step_result = handler_fn(current_df, handler_params)
+                    if not step_result.success:
+                        log.info("    handler returned success=False, falling through to codegen")
+                        step_result = None
                 except Exception as e:
-                    log.error("    handler error: %s", e)
+                    log.info("    handler raised %s, falling through to codegen", e)
                     step_result = None
-            else:
-                log.info("    handler '%s' not found, generating code", use_handler)
-                needs_custom_code = True
 
-        # ── Generate and execute custom code ─────────────────────────────
-        if needs_custom_code or step_result is None:
+        # ── Fallback: generate and execute custom code ───────────────────
+        # Triggers when: handler missing, handler failed, handler returned
+        # success=False, or needs_custom_code was set by the planner.
+        if step_result is None or needs_custom_code:
             log.info("    generating custom code")
             code_desc = step.get("custom_code_description") or description
 
