@@ -41,6 +41,10 @@ HANDLER_CATALOG = """\
 | clean.strip_whitespace | trim whitespace from strings | (none) |
 | clean.drop_nulls | drop rows/cols with nulls | column?, threshold? |
 | clean.replace_values | replace specific values | column?, old_value, new_value |
+| clean.lowercase_columns | normalize column names to snake_case | (none) |
+| clean.drop_constant | drop columns with all same values | (none) |
+| clean.clip_outliers | clip outliers (IQR or z-score) | column?, method? (iqr/zscore) |
+| clean.change_dtype | cast column to specific type | column, dtype (int/float/str/bool/datetime/category) |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |

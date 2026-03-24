@@ -1,5 +1,7 @@
-"""Cleaning handler — drop/fill nulls, remove duplicates, fix dtypes, rename, drop columns."""
+"""Cleaning handler — drop/fill nulls, remove duplicates, fix dtypes, rename, drop, outliers, etc."""
 from __future__ import annotations
+
+import re
 
 import numpy as np
 import pandas as pd
@@ -146,3 +148,102 @@ class CleanHandler(BaseHandler):
             result = result.replace(old_val, new_val)
             summary = f"Replaced '{old_val}' with '{new_val}' in all columns"
         return HandlerResult(success=True, result_df=result, output_type="generate", summary=summary)
+
+    @staticmethod
+    def handle_lowercase_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Normalize column names to lowercase snake_case."""
+        result = df.copy()
+        mapping: dict[str, str] = {}
+        new_cols = []
+        for c in result.columns:
+            # CamelCase → snake_case, strip special chars, collapse underscores
+            new = re.sub(r"([a-z])([A-Z])", r"\1_\2", str(c))
+            new = re.sub(r"[^a-zA-Z0-9_]", "_", new).lower().strip("_")
+            new = re.sub(r"_+", "_", new)
+            if new != c:
+                mapping[c] = new
+            new_cols.append(new)
+        result.columns = new_cols
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Renamed {len(mapping)} columns to snake_case" if mapping else "All columns already snake_case",
+            metadata={"renamed": mapping},
+        )
+
+    @staticmethod
+    def handle_drop_constant(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Drop columns where all values are the same (zero information)."""
+        result = df.copy()
+        nunique = result.nunique(dropna=False)
+        constant_cols = nunique[nunique <= 1].index.tolist()
+        if constant_cols:
+            result = result.drop(columns=constant_cols)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Dropped {len(constant_cols)} constant column(s): {constant_cols}" if constant_cols else "No constant columns found",
+        )
+
+    @staticmethod
+    def handle_clip_outliers(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Clip outliers using IQR or z-score method."""
+        method = params.get("method", "iqr")
+        col = params.get("column")
+        result = df.copy()
+        cols = [col] if col and col in result.columns else result.select_dtypes(include="number").columns.tolist()
+        clipped_info: dict[str, int] = {}
+
+        for c in cols:
+            before_outliers = 0
+            if method == "zscore":
+                mean, std = result[c].mean(), result[c].std()
+                if std == 0:
+                    continue
+                z = (result[c] - mean) / std
+                mask = z.abs() > 3
+                before_outliers = int(mask.sum())
+                result.loc[mask & (z > 0), c] = mean + 3 * std
+                result.loc[mask & (z < 0), c] = mean - 3 * std
+            else:  # iqr
+                q1 = result[c].quantile(0.25)
+                q3 = result[c].quantile(0.75)
+                iqr = q3 - q1
+                lower = q1 - 1.5 * iqr
+                upper = q3 + 1.5 * iqr
+                mask = (result[c] < lower) | (result[c] > upper)
+                before_outliers = int(mask.sum())
+                result[c] = result[c].clip(lower=lower, upper=upper)
+            if before_outliers > 0:
+                clipped_info[c] = before_outliers
+
+        total = sum(clipped_info.values())
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Clipped {total:,} outliers ({method.upper()}) across {len(clipped_info)} columns",
+            metadata={"clipped": clipped_info},
+        )
+
+    @staticmethod
+    def handle_change_dtype(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Cast a column to a specific dtype (int, float, str, bool, datetime, category)."""
+        col = params.get("column")
+        dtype = params.get("dtype", "str")
+        if not col or col not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{col}' not found")
+        result = df.copy()
+        try:
+            if dtype in ("datetime", "date"):
+                result[col] = pd.to_datetime(result[col], errors="coerce", format="mixed")
+            elif dtype == "category":
+                result[col] = result[col].astype("category")
+            elif dtype == "bool":
+                result[col] = result[col].astype(bool)
+            elif dtype in ("int", "integer"):
+                result[col] = pd.to_numeric(result[col], errors="coerce").astype("Int64")
+            elif dtype in ("float", "numeric"):
+                result[col] = pd.to_numeric(result[col], errors="coerce")
+            else:
+                result[col] = result[col].astype(str)
+            return HandlerResult(success=True, result_df=result, output_type="generate",
+                                 summary=f"Changed '{col}' dtype to {dtype}")
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Cannot convert '{col}' to {dtype}: {e}")
