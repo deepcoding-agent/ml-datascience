@@ -19,7 +19,7 @@ def run_coding_agent(message: str, history: list[ChatMessage], model_id: str | N
     llm = get_llm(temperature=0.3, max_tokens=1024, model_id=model_id)
     msgs = (
         [SystemMessage(content=CODING_SYSTEM)]
-        + build_lc_history(history[-20:])
+        + build_lc_history(history[-6:])
         + [HumanMessage(content=message)]
     )
     return llm.invoke(msgs).content

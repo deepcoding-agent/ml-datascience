@@ -1,25 +1,24 @@
 # ml-datascience — PrepPilot FastAPI Backend
 
-FastAPI service powering the PrepPilot AI data science platform. Features a **3-tier agent architecture** with 60+ pre-built handlers, LLM-powered dynamic handler generation, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
+FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 55 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
 
 ---
 
 ## Table of Contents
 
 1. [Architecture](#1-architecture)
-2. [3-Tier Agent System](#2-3-tier-agent-system)
+2. [AI-First Agent System](#2-ai-first-agent-system)
 3. [Project Structure](#3-project-structure)
 4. [Setup](#4-setup)
 5. [Running the Server](#5-running-the-server)
 6. [API Reference](#6-api-reference)
 7. [Handler Registry](#7-handler-registry)
-8. [Intent Classifier](#8-intent-classifier)
-9. [Data Preparation Pipeline](#9-data-preparation-pipeline)
-10. [Code Execution Sandbox](#10-code-execution-sandbox)
-11. [Thai Language Support](#11-thai-language-support)
-12. [Logging](#12-logging)
-13. [Configuration](#13-configuration)
-14. [Dependencies](#14-dependencies)
+8. [Data Preparation Pipeline](#8-data-preparation-pipeline)
+9. [Code Execution Sandbox](#9-code-execution-sandbox)
+10. [Thai Language Support](#10-thai-language-support)
+11. [Logging](#11-logging)
+12. [Configuration](#12-configuration)
+13. [Dependencies](#13-dependencies)
 
 ---
 
@@ -28,7 +27,7 @@ FastAPI service powering the PrepPilot AI data science platform. Features a **3-
 ```
 Web App (Next.js :3000)
         │
-        │  POST /chat           →  DS-Agent (3-tier) or Coding Agent
+        │  POST /chat           →  DS-Agent (AI planner) or Coding Agent
         │  POST /prepare        →  Data Preparation Pipeline (with PrepConfig)
         │  POST /eda-report     →  Structured EDA with auto-charts
         │  POST /suggest-target →  LLM target column suggester
@@ -45,23 +44,22 @@ DS-Agent API (FastAPI :8000)
         ├── api/logger.py            Centralized structured logger → stderr
         │
         ├── api/agents/
-        │   ├── datascience.py       DS-Agent: 3-tier orchestrator (handlers → dynamic gen → sandbox)
-        │   ├── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
-        │   ├── intent_classifier.py 3-level intent tree with Thai+English phrase matching
+        │   ├── datascience.py       DS-Agent orchestrator: plan → execute → interpret (AI-first)
+        │   ├── planner.py           AI planner: user message + dataset → JSON plan of steps
+        │   ├── step_executor.py     Step executor: handler resolution or codegen fallback
+        │   ├── code_generator.py    LLM-powered Python code generation for custom steps
+        │   ├── result_interpreter.py LLM result interpreter (codegen results only)
         │   ├── context_analyzer.py  DataContext builder (nulls, skew, cardinality, warnings)
-        │   ├── handler_generator.py Dynamic handler generation via LLM (Tier 2)
-        │   └── result_validator.py  Post-execution validation with retry strategies
+        │   └── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
         │
         ├── api/handlers/
-        │   ├── __init__.py          64-entry HANDLER_REGISTRY + get_handler()
+        │   ├── __init__.py          55-entry HANDLER_REGISTRY
         │   ├── base.py              HandlerResult dataclass, BaseHandler utilities, Thai keywords
         │   ├── stats_handler.py     10 functions (describe, shape, nulls, value_counts, etc.)
         │   ├── clean_handler.py     8 functions (drop/fill nulls, remove dupes, fix dtypes, etc.)
         │   ├── transform_handler.py 14 functions (filter, sort, groupby, encode, scale, etc.)
         │   ├── viz_handler.py       17 Plotly chart types (bar, scatter, pie, heatmap, etc.)
-        │   ├── feature_handler.py   6 functions (importance, PCA, correlation filter, etc.)
-        │   ├── code_handler.py      Sandbox fallback handler
-        │   └── generated/           LLM-generated dynamic handlers (disk cache)
+        │   └── feature_handler.py   6 functions (importance, PCA, correlation filter, etc.)
         │
         ├── api/routes/
         │   ├── chat.py              POST /chat — routes to DS-Agent or Coding Agent
@@ -84,23 +82,23 @@ POST /chat
  │            │
  │            ├── Translate Thai keywords → English
  │            ├── Analyze dataset context (nulls, skew, cardinality, warnings)
- │            ├── Detect useless columns (ID-like columns excluded from matching)
- │            ├── Check for explicit chart type request
+ │            ├── Check for greeting (trivial shortcut, no AI needed)
  │            │
- │            ├── TIER 1: Intent classify → handler lookup in HANDLER_REGISTRY
- │            │     ↓ (if handler found)
- │            │     Execute pre-built handler → validate result
+ │            ├── AI PLANNER (sole decision-maker)
+ │            │     ↓ LLM sees full handler catalog (55 handlers with IDs + params)
+ │            │     ↓ Outputs JSON plan: each step has handler:{id, params} OR codegen:{task}
+ │            │     ↓ No hardcoded keywords, no regex — AI decides everything
  │            │
- │            ├── TIER 2: Dynamic handler generation (if complex or no Tier 1 match)
- │            │     ↓ LLM generates handler code → syntax check → validation → compile
- │            │     Cache to disk + memory → execute → validate result
+ │            ├── STEP EXECUTOR (for each step in the plan):
+ │            │     ├── handler.id specified → resolve from HANDLER_REGISTRY → execute
+ │            │     │     └── Handler fails → silent codegen fallback
+ │            │     └── codegen specified → LLM generates Python → sandbox exec
+ │            │           └── Auto-retry on error (send error back to LLM once)
  │            │
- │            ├── TIER 3: One-shot sandbox exec (fallback)
- │            │     ↓ LLM generates Python code → sandbox exec → capture outputs
- │            │     Auto-retry on error (send error back to LLM once)
+ │            ├── RESPONSE BUILDER
+ │            │     ├── All steps used handlers → return handler summaries directly (no LLM)
+ │            │     └── Codegen involved → LLM interpreter explains results with real data
  │            │
- │            ├── LLM interprets results with real computed data (no placeholders)
- │            ├── Auto-chart: adds Plotly chart to categorical stat responses
  │            └── Smart output routing: query vs generate classification
  │
  └── NO datasets → run_coding_agent()
@@ -109,33 +107,36 @@ POST /chat
 
 ---
 
-## 2. 3-Tier Agent System
+## 2. AI-First Agent System
 
-The DS-Agent uses a tiered execution strategy for reliability and extensibility:
+The DS-Agent uses a fully AI-driven architecture where the **LLM planner is the sole decision-maker**. No hardcoded keywords, no regex patterns, no intent classifiers.
 
-### Tier 1 — Pre-built Handlers (fastest, most reliable)
+### AI Planner
 
-64 handler functions organized into 6 categories: **stats**, **clean**, **transform**, **viz**, **feature**, **code**. Each handler receives `(df, params)` and returns a standardized `HandlerResult`. Executed when the intent classifier maps the user's request to a known `(category, sub_intent)` pair.
+The planner receives the user message, dataset context, and a **complete handler catalog** (all 55 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
 
-### Tier 2 — Dynamic Handler Generation (LLM-powered)
+- **`handler`** — `{id: "category.sub", params: {...}}` → instant execution via pre-built handler
+- **`codegen`** — `{task: "description", produces: "dataframe|chart|text"}` → LLM generates Python code
 
-When no pre-built handler matches, the LLM generates a new handler function. The generated code undergoes:
-1. Syntax validation
-2. LLM-based code review
-3. Compilation in isolated namespace (pd, np, px, go, HandlerResult)
-4. Disk + memory caching for reuse
+The planner decides output_type (`query` vs `generate`) and handles disambiguation (e.g., "show nulls" → `stats.null_report` vs "fill nulls" → `clean.fill_nulls`).
 
-### Tier 3 — Sandbox Execution (one-shot fallback)
+### Step Executor
 
-For complex multi-step requests (e.g., "split data by category then plot each"), the LLM generates Python code executed in the sandbox. Includes auto-retry: if execution fails, the error is sent back to the LLM for one fix attempt.
+Follows the planner's decisions exactly:
+1. **Handler route** — resolves `handler.id` from registry, executes with smart column matching (fuzzy match for user-specified column names)
+2. **Codegen route** — LLM generates Python, executed in sandbox with auto-retry on failure
+3. **Silent fallback** — if a handler fails or isn't found, automatically falls back to codegen (user never sees errors)
+
+### Response Builder
+
+- **Handler-only results** → uses handler summaries directly (no extra LLM call, fastest path)
+- **Codegen or mixed results** → LLM interpreter generates a human-readable explanation using actual computed data (never placeholders)
 
 ### Smart Output Routing
 
-Every response is classified as:
-- **`query`** — show inline in chat only, never save as dataset (e.g., stats, head/tail, answers)
-- **`generate`** — save as new dataset, add tab to DatasetPicker (e.g., filter, transform, clean)
-
-Logic checks intent keywords AND DataFrame shape (≤10 rows + ≤3 cols = query, not generate).
+Every response is classified by the planner as:
+- **`query`** — show inline in chat only, never save as dataset (stats, charts, questions)
+- **`generate`** — save as new dataset, add tab to DatasetPicker (cleaning, transforms, data generation)
 
 ---
 
@@ -155,23 +156,22 @@ ml-datascience/
 │   ├── data_preparation_agent.py     ← ML data prep pipeline
 │   │
 │   ├── agents/
-│   │   ├── datascience.py            ← DS-Agent: 3-tier orchestrator
-│   │   ├── coding.py                 ← Coding Q&A agent
-│   │   ├── intent_classifier.py      ← 3-level intent tree (50+ sub-intents)
+│   │   ├── datascience.py            ← DS-Agent orchestrator (AI-first, no keyword routing)
+│   │   ├── planner.py                ← AI planner: handler catalog + JSON plan output
+│   │   ├── step_executor.py          ← Step executor: handler resolution + codegen fallback
+│   │   ├── code_generator.py         ← LLM code generation with templates
+│   │   ├── result_interpreter.py     ← LLM result interpreter (codegen results only)
 │   │   ├── context_analyzer.py       ← DataContext analysis (nulls, skew, cardinality)
-│   │   ├── handler_generator.py      ← Dynamic handler generation (Tier 2)
-│   │   └── result_validator.py       ← Post-execution validation
+│   │   └── coding.py                 ← Coding Q&A agent
 │   │
 │   ├── handlers/
-│   │   ├── __init__.py               ← HANDLER_REGISTRY (64 entries)
+│   │   ├── __init__.py               ← HANDLER_REGISTRY (55 entries)
 │   │   ├── base.py                   ← HandlerResult, BaseHandler, Thai keywords
 │   │   ├── stats_handler.py          ← 10 stats functions
 │   │   ├── clean_handler.py          ← 8 cleaning functions
 │   │   ├── transform_handler.py      ← 14 transform functions
 │   │   ├── viz_handler.py            ← 17 Plotly chart types
-│   │   ├── feature_handler.py        ← 6 feature engineering functions
-│   │   ├── code_handler.py           ← Sandbox fallback
-│   │   └── generated/                ← LLM-generated handlers (disk cache)
+│   │   └── feature_handler.py        ← 6 feature engineering functions
 │   │
 │   └── routes/
 │       ├── chat.py                   ← POST /chat
@@ -288,15 +288,14 @@ Routes to the DS-Agent (datasets present) or Coding Agent (no datasets).
   "response": "Here are the top 10 properties by sale price...",
   "artifacts": {
     "code": "result = df.nlargest(10, 'SalePrice')",
-    "code_output": "   Id  SalePrice ...",
-    "charts_plotly": ["<plotly-json>"],
+    "chart_json": "<plotly-json>",
     "inline_table": [{ "Id": 1, "SalePrice": 208500 }],
     "data_wrangled": [{ "Id": 1, "SalePrice": 208500 }],
     "dataset_name": "top_10_by_sale_price",
-    "dataset_shape": { "rows": 10, "cols": 81 }
+    "dataset_shape": { "rows": 10, "cols": 81 },
+    "output_type": "query",
+    "should_activate": false
   },
-  "output_type": "table",
-  "should_activate": false,
   "model_used": "claude-sonnet-4-6"
 }
 ```
@@ -304,9 +303,9 @@ Routes to the DS-Agent (datasets present) or Coding Agent (no datasets).
 | Field | Description |
 |---|---|
 | `model_id` | Optional. `"claude-sonnet-4-6"`, `"gpt-4o-mini"`, etc. Auto-detects provider |
-| `output_type` | `text` \| `table` \| `chart` \| `dataset` \| `chart+dataset` |
+| `output_type` | `"query"` (read-only, inline) or `"generate"` (creates new dataset) |
 | `should_activate` | Whether frontend should auto-switch to the new dataset |
-| `charts_plotly` | Array of Plotly JSON strings (interactive charts) |
+| `chart_json` | Plotly JSON string (interactive chart) |
 
 ---
 
@@ -411,45 +410,28 @@ Returns available LLM models with provider detection based on configured API key
 
 ## 7. Handler Registry
 
-64 pre-built handlers across 6 categories:
+55 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
 
 ### Stats (10 handlers)
-`describe`, `shape`, `null_report`, `value_counts`, `unique_values`, `dtypes`, `correlation`, `skewness`, `outlier_report`, `duplicate_report`
+`stats.describe`, `stats.shape`, `stats.null_report`, `stats.value_counts`, `stats.unique_values`, `stats.dtypes`, `stats.correlation`, `stats.skewness`, `stats.outlier_report`, `stats.duplicate_report`
 
 ### Clean (8 handlers)
-`drop_nulls`, `fill_nulls`, `remove_duplicates`, `fix_dtypes`, `rename_column`, `drop_column`, `strip_whitespace`, `replace_values`
+`clean.drop_nulls`, `clean.fill_nulls`, `clean.remove_duplicates`, `clean.fix_dtypes`, `clean.rename_column`, `clean.drop_column`, `clean.strip_whitespace`
 
 ### Transform (14 handlers)
-`filter`, `assign_value`, `sort`, `groupby_agg`, `add_column`, `encode_label`, `encode_onehot`, `scale_minmax`, `scale_standard`, `bin_column`, `inject_null`, `sample_rows`, `head`, `tail`
+`transform.filter`, `transform.assign_value`, `transform.sort`, `transform.groupby_agg`, `transform.encode_label`, `transform.encode_onehot`, `transform.scale_minmax`, `transform.scale_standard`, `transform.inject_null`, `transform.sample_rows`, `transform.head`, `transform.tail`
 
 ### Visualization (17 handlers)
-`bar_chart`, `histogram`, `scatter`, `line_chart`, `box_plot`, `violin_plot`, `heatmap`, `pie_chart`, `pairplot`, `missing_heatmap`, `count_plot`, `time_series`, `bubble_chart`, `treemap`, `sunburst`, `parallel_coords`, `distribution`
+`viz.bar_chart`, `viz.histogram`, `viz.scatter`, `viz.line_chart`, `viz.box_plot`, `viz.violin_plot`, `viz.heatmap`, `viz.pie_chart`, `viz.pairplot`, `viz.count_plot`, `viz.distribution`
 
 All charts are Plotly-first (interactive JSON). Pie charts auto-group into top N + "Other" with percentages.
 
 ### Feature Engineering (6 handlers)
-`feature_importance`, `pca`, `correlation_filter`, `log_transform`, `variance_filter`, `polynomial_features`
-
-### Code (sandbox fallback)
-Direct sandbox execution for requests that don't match any handler.
+`feature.feature_importance`, `feature.pca`, `feature.correlation_filter`, `feature.log_transform`
 
 ---
 
-## 8. Intent Classifier
-
-3-level intent tree with ~50 sub-intents across all categories.
-
-**Features:**
-- Thai + English phrase matching via `THAI_COLUMN_KEYWORDS` translation
-- Structural keyword guard — prevents "how many rows" from matching a column named "rows"
-- Smart column matching with fuzzy substring matching
-- Useless column exclusion (ID-like columns filtered out)
-- Explicit chart type detection overrides auto-selection
-- Complex request detection routes multi-step operations to LLM codegen
-
----
-
-## 9. Data Preparation Pipeline
+## 8. Data Preparation Pipeline
 
 `api/data_preparation_agent.py` runs an LLM-guided ML pipeline:
 
@@ -467,7 +449,7 @@ Returns structured `PrepReportDetail` with per-step metrics + LLM-generated mark
 
 ---
 
-## 10. Code Execution Sandbox
+## 9. Code Execution Sandbox
 
 Code runs inside Python `exec()` with a controlled namespace:
 
@@ -497,41 +479,40 @@ Code runs inside Python `exec()` with a controlled namespace:
 
 ---
 
-## 11. Thai Language Support
+## 10. Thai Language Support
 
 PrepPilot supports Thai language queries throughout the stack:
 
 - **`THAI_COLUMN_KEYWORDS`** — 30+ Thai → English keyword mappings (ห้องนอน → bedroom, ราคา → price, etc.)
-- **`translate_thai_keywords()`** — applied before intent classification and column matching
-- **`VISUALIZATION_TRIGGERS`** — includes Thai chart keywords (วิซ, กราฟ, แท่ง, พล็อต)
+- **`translate_thai_keywords()`** — applied before planner receives the message
+- **Thai in planner** — the AI planner prompt includes Thai language examples and a rule to translate Thai intent
 - **Thai fonts** — matplotlib uses Tahoma/Arial Unicode MS; Plotly uses `"Inter, Noto Sans Thai, Tahoma"`
 
 ---
 
-## 12. Logging
+## 11. Logging
 
 All logs written to **stderr** alongside uvicorn's access logs.
 
 ```
-22:14:01  INFO   ━━ DS-Agent start ━━  datasets=['housing.csv']  model=claude-sonnet-4-6
-22:14:01  INFO     [1] context analysis  shape=(1460, 81)  nulls=6965  dupes=0
-22:14:01  INFO     [2] intent classified  category=stats  sub_intent=describe
-22:14:01  INFO     [3] Tier 1 handler executed  handler=stats.describe  (0.02s)
-22:14:01  INFO     [4] result validated  success=True
-22:14:02  INFO     [5] LLM interpretation  (1.2s)
-22:14:02  INFO   ━━ DS-Agent done  total=1.4s  tier=1 ━━
+22:14:01  INFO   ━━ DS-Agent start ━━  datasets=['housing.csv']
+22:14:01  INFO     context: (1460, 81), nulls=19 cols, dupes=0
+22:14:02  INFO     Plan: Get dataset dimensions — 1 step(s), output_type=query
+22:14:02  INFO     Step 1: Get dataset shape
+22:14:02  INFO       route=handler id=stats.shape
+22:14:02  INFO   ━━ DS-Agent done  output=query  steps=1  elapsed=1.2s ━━
 ```
 
 | Log Level | What you see |
 |---|---|
 | `debug` | Everything including full code blocks, handler params |
-| `info` | Step timings, shapes, intents, tier used (default) |
+| `info` | Step timings, plan details, routes used (default) |
 | `warning` | Only warnings and errors |
 | `error` | Only errors |
 
 ---
 
-## 13. Configuration
+## 12. Configuration
 
 All configuration via `api/.env`:
 
@@ -555,7 +536,7 @@ Auto-detects provider from `model_id`. Uses `functools.lru_cache` keyed on `(pro
 
 ---
 
-## 14. Dependencies
+## 13. Dependencies
 
 Key packages:
 
