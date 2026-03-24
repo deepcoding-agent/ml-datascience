@@ -84,6 +84,14 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "log_transform"):       FeatureHandler.handle_log_transform,
     ("feature", "variance_filter"):     FeatureHandler.handle_variance_filter,
     ("feature", "polynomial_features"): FeatureHandler.handle_polynomial_features,
+    ("feature", "datetime_features"):   FeatureHandler.handle_datetime_features,
+    ("feature", "target_encode"):       FeatureHandler.handle_target_encode,
+    ("feature", "select_k_best"):       FeatureHandler.handle_select_k_best,
+    ("feature", "power_transform"):     FeatureHandler.handle_power_transform,
+    ("feature", "ratio_features"):      FeatureHandler.handle_ratio_features,
+    ("feature", "frequency_encode"):    FeatureHandler.handle_frequency_encode,
+    ("feature", "cyclical_encode"):     FeatureHandler.handle_cyclical_encode,
+    ("feature", "sqrt_transform"):      FeatureHandler.handle_sqrt_transform,
 }
 
 

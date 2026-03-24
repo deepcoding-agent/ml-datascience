@@ -96,6 +96,14 @@ HANDLER_CATALOG = """\
 | feature.correlation_filter | drop highly correlated features | value? (threshold, default 0.95) |
 | feature.variance_filter | drop low-variance features | value? (threshold, default 0.01) |
 | feature.polynomial_features | add interaction features | columns? |
+| feature.datetime_features | extract year/month/day/dayofweek/hour from datetime | column? |
+| feature.target_encode | mean/target encoding for categoricals | column? (target), encode_column? |
+| feature.select_k_best | select top K features by statistical test | column? (target), k? (default 10) |
+| feature.power_transform | Box-Cox/Yeo-Johnson normalization | column?, method? (yeo-johnson/box-cox) |
+| feature.ratio_features | create ratio features (col_a/col_b) | columns? |
+| feature.frequency_encode | encode categoricals by frequency | column? |
+| feature.cyclical_encode | sin/cos encoding for cyclical features | column, period? |
+| feature.sqrt_transform | square root transform for moderate skew | column? |
 """
 
 PLANNER_PROMPT = """\
