@@ -63,8 +63,6 @@ def get_llm(
 
 def get_default_model_id() -> str:
     """Returns the default model ID from environment."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
     return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 
