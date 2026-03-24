@@ -83,6 +83,11 @@ HANDLER_KEYWORD_MAP: dict[str, tuple[str, str]] = {
     "sample": ("transform", "sample_rows"),
     "head": ("transform", "head"),
     "tail": ("transform", "tail"),
+    "inject null": ("transform", "inject_null"),
+    "add null": ("transform", "inject_null"),
+    "generate null": ("transform", "inject_null"),
+    "random null": ("transform", "inject_null"),
+    "null value": ("transform", "inject_null"),
 
     # Viz — always use handler (fast + consistent styling)
     "bar chart": ("viz", "bar_chart"),
@@ -120,7 +125,6 @@ ALWAYS_CODEGEN = frozenset({
     "bin", "cut", "split into", "level", "range",
     "moving average", "rolling", "cumulative",
     "z-score", "zscore", "standardize",
-    "inject null", "add null", "generate null",
     "synthetic", "bootstrap", "resample",
     "polynomial", "interaction feature",
     "custom", "calculate", "compute",
