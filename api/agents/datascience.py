@@ -312,13 +312,16 @@ def _extract_operation_params(message: str, df: pd.DataFrame) -> dict:
     if n_match:
         params["n"] = int(n_match.group(1))
 
-    # Column match
+    # Column match — skip structural keywords
+    from api.agents.intent_classifier import STRUCTURAL_KEYWORDS
     for col in df.columns:
         if col.lower() in msg or col in message:
             params["column"] = col
             break
     if "column" not in params:
         for word in msg.split():
+            if word in STRUCTURAL_KEYWORDS:
+                continue
             match = BaseHandler.smart_column_match(df, word)
             if match:
                 params["column"] = match

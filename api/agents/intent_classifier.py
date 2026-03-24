@@ -102,6 +102,21 @@ _OUTPUT_TYPE_MAP = {
 # Override: these transform sub-intents are queries, not generates
 _QUERY_OVERRIDES = {"head", "tail", "groupby_agg"}
 
+# Structural keywords — never fuzzy-match these against column names
+STRUCTURAL_KEYWORDS = frozenset({
+    "rows", "row", "columns", "column", "cols", "col", "shape", "size",
+    "index", "header", "data", "dataset", "table", "dataframe", "df",
+    "count", "total", "number", "how", "many", "much", "all", "every",
+    "and", "the", "of", "is", "are", "what", "show", "me", "give",
+})
+
+
+def is_structural_query(message: str) -> bool:
+    """Return True if message contains ONLY structural keywords (no column references)."""
+    words = set(re.findall(r"[a-zA-Z]+", message.lower()))
+    non_structural = words - STRUCTURAL_KEYWORDS
+    return len(non_structural) == 0
+
 
 def classify_intent(
     message: str,
@@ -110,6 +125,14 @@ def classify_intent(
 ) -> IntentResult:
     """Classify user message into category + sub_intent + params."""
     msg_lower = message.lower().strip()
+
+    # Guard: structural-only queries go straight to shape handler
+    if is_structural_query(message):
+        return IntentResult(
+            category="stats", sub_intent="shape", params={},
+            output_type="query", confidence=1.0, fallback_to_custom=False,
+        )
+
     best_category = "custom"
     best_sub = "custom_code"
     best_score = 0.0
@@ -155,10 +178,11 @@ def extract_params(message: str, sub_intent: str, ctx: DataContext) -> dict:
     msg = message.strip()
 
     # Try to find column names mentioned in the message
+    # Skip structural keywords — they are not column references
     matched_cols: list[str] = []
     dummy_df = pd.DataFrame(columns=ctx.column_list)
     for word in re.split(r"[\s,;]+", msg):
-        if len(word) < 2:
+        if len(word) < 2 or word.lower() in STRUCTURAL_KEYWORDS:
             continue
         match = BaseHandler.smart_column_match(dummy_df, word)
         if match:
