@@ -52,6 +52,9 @@ CORE RULES:
 - For viewing: result = df.head(N); print(result)
 - For charts: fig = px.chart_type(...) — system captures `fig` automatically.
   Never call fig.show(). Available: px, go, make_subplots, ff.
+- NULL INJECTION: When user says "inject null", "add null", "แทรก null", "สร้าง dataset มี null":
+  df_new = df.copy(); for col in df_new.columns: idx = np.random.choice(df_new.index, size=int(len(df_new)*fraction), replace=False); df_new.loc[idx, col] = np.nan
+  result = df_new — NEVER just count existing nulls. output_type = "generate" always.
 
 {data_context}
 """

@@ -142,6 +142,26 @@ class TransformHandler(BaseHandler):
                              summary=f"Binned '{col}' into {bins} bins → '{col}_bin'")
 
     @staticmethod
+    def handle_inject_null(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Inject random NaN values into a copy of the DataFrame."""
+        fraction = params.get("value", 15)
+        if fraction > 1:
+            fraction = fraction / 100.0  # convert 15 → 0.15
+        result = df.copy()
+        for col in result.columns:
+            n_nulls = int(len(result) * fraction)
+            if n_nulls > 0:
+                null_indices = np.random.choice(result.index, size=n_nulls, replace=False)
+                result.loc[null_indices, col] = np.nan
+        total_nulls = int(result.isnull().sum().sum())
+        total_cells = result.shape[0] * result.shape[1]
+        actual_pct = total_nulls / total_cells * 100 if total_cells > 0 else 0
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Injected ~{fraction*100:.0f}% null values. Actual: {actual_pct:.1f}% ({total_nulls:,}/{total_cells:,} cells)",
+        )
+
+    @staticmethod
     def handle_sample_rows(df: pd.DataFrame, params: dict) -> HandlerResult:
         n = min(params.get("n", 10), len(df))
         result = df.sample(n=n, random_state=42)

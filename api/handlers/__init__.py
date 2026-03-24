@@ -46,6 +46,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("transform", "scale_minmax"):   TransformHandler.handle_scale_minmax,
     ("transform", "scale_standard"): TransformHandler.handle_scale_standard,
     ("transform", "bin_column"):     TransformHandler.handle_bin_column,
+    ("transform", "inject_null"):    TransformHandler.handle_inject_null,
     ("transform", "sample_rows"):    TransformHandler.handle_sample_rows,
     ("transform", "head"):           TransformHandler.handle_head,
     ("transform", "tail"):           TransformHandler.handle_tail,
