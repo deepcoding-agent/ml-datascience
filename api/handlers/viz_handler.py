@@ -260,3 +260,112 @@ class VizHandler(BaseHandler):
         _style(fig, title=f"Distribution of {col}")
         return HandlerResult(success=True, charts_plotly=[fig.to_json()],
                              summary=f"Distribution of '{col}'")
+
+    # ── Stacked bar ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_stacked_bar(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Stacked bar chart — group by one column, color by another."""
+        cols = params.get("columns", [])
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        x_col = cols[0] if len(cols) > 0 and cols[0] in df.columns else (cat_cols[0] if len(cat_cols) > 0 else df.columns[0])
+        color_col = cols[1] if len(cols) > 1 and cols[1] in df.columns else (cat_cols[1] if len(cat_cols) > 1 else None)
+
+        if color_col:
+            ct = pd.crosstab(df[x_col], df[color_col])
+            fig = px.bar(ct, barmode="stack")
+        else:
+            vc = df[x_col].value_counts().reset_index()
+            vc.columns = [x_col, "count"]
+            fig = px.bar(vc, x=x_col, y="count")
+            fig.update_traces(marker_color="#FB8C3C")
+
+        _style(fig, title=f"{x_col}" + (f" by {color_col}" if color_col else ""), bargap=0.3)
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()],
+                             summary=f"Stacked bar: {x_col}" + (f" by {color_col}" if color_col else ""))
+
+    # ── Area chart ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_area_chart(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Area chart for trends or compositions."""
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        y_col = col if col and col in df.columns else (num_cols[0] if num_cols else df.columns[0])
+        fig = px.area(df.reset_index(), x="index", y=y_col)
+        _style(fig, title=f"{y_col}")
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()],
+                             summary=f"Area chart of '{y_col}'")
+
+    # ── QQ plot ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_qq_plot(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """QQ plot — check if data follows normal distribution."""
+        from scipy import stats as sp_stats
+
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in df.columns else (num_cols[0] if num_cols else None)
+        if not col:
+            return HandlerResult(success=False, error="No numeric column for QQ plot")
+
+        data = df[col].dropna().values
+        (theoretical, sample), (slope, intercept, _) = sp_stats.probplot(data, dist="norm")
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=theoretical, y=sample, mode="markers",
+                                 marker=dict(color="#FB8C3C", size=5, opacity=0.7), name="Data"))
+        line_x = [min(theoretical), max(theoretical)]
+        line_y = [slope * x + intercept for x in line_x]
+        fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines",
+                                 line=dict(color="#457B9D", dash="dash"), name="Normal"))
+        _style(fig, title=f"QQ Plot: {col}",
+               xaxis_title="Theoretical Quantiles", yaxis_title="Sample Quantiles")
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()],
+                             summary=f"QQ plot of '{col}'")
+
+    # ── Density plot (KDE) ───────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_density_plot(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """KDE density plot — smoother alternative to histogram."""
+        col = params.get("column")
+        group_col = params.get("group")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in df.columns else (num_cols[0] if num_cols else None)
+        if not col:
+            return HandlerResult(success=False, error="No numeric column for density plot")
+
+        if group_col and group_col in df.columns:
+            fig = px.histogram(df, x=col, color=group_col, histnorm="density",
+                               marginal="rug", barmode="overlay", opacity=0.5)
+        else:
+            fig = px.histogram(df, x=col, histnorm="density", marginal="rug")
+            fig.update_traces(marker_color="#FB8C3C", opacity=0.7)
+
+        _style(fig, title=f"Density: {col}")
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()],
+                             summary=f"Density plot of '{col}'")
+
+    # ── Strip / jitter plot ──────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_strip_plot(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Strip/jitter plot — shows individual data points."""
+        col = params.get("column")
+        group_col = params.get("group")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        col = col if col and col in df.columns else (num_cols[0] if num_cols else df.columns[0])
+        group_col = group_col if group_col and group_col in df.columns else (cat_cols[0] if cat_cols else None)
+
+        if group_col:
+            fig = px.strip(df, x=group_col, y=col, color=group_col)
+        else:
+            fig = px.strip(df, y=col)
+
+        fig.update_traces(marker=dict(size=5, opacity=0.6))
+        _style(fig, title=f"{col}" + (f" by {group_col}" if group_col else ""), showlegend=False)
+        return HandlerResult(success=True, charts_plotly=[fig.to_json()],
+                             summary=f"Strip plot of '{col}'")

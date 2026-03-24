@@ -109,6 +109,11 @@ HANDLER_CATALOG = """\
 | viz.missing_heatmap | missing values pattern | (none) |
 | viz.treemap | treemap of categorical column | column? |
 | viz.bubble_chart | bubble chart (3 numeric cols) | (none) |
+| viz.stacked_bar | stacked bar (group by 2 categoricals) | columns? (list: [x, color]) |
+| viz.area_chart | area chart for trends | column? |
+| viz.qq_plot | QQ plot for normality check | column? |
+| viz.density_plot | KDE density plot | column?, group? |
+| viz.strip_plot | jitter/strip showing individual points | column?, group? |
 
 ### Feature Engineering
 | id | what it does | params |
@@ -127,6 +132,7 @@ HANDLER_CATALOG = """\
 | feature.frequency_encode | encode categoricals by frequency | column? |
 | feature.cyclical_encode | sin/cos encoding for cyclical features | column, period? |
 | feature.sqrt_transform | square root transform for moderate skew | column? |
+| feature.mutual_info | mutual information scores (numeric + categorical) | column? (target) |
 """
 
 PLANNER_PROMPT = """\

@@ -100,6 +100,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("viz", "sunburst"):           VizHandler.handle_sunburst,
     ("viz", "parallel_coords"):    VizHandler.handle_parallel_coords,
     ("viz", "distribution"):       VizHandler.handle_distribution,
+    ("viz", "stacked_bar"):        VizHandler.handle_stacked_bar,
+    ("viz", "area_chart"):         VizHandler.handle_area_chart,
+    ("viz", "qq_plot"):            VizHandler.handle_qq_plot,
+    ("viz", "density_plot"):       VizHandler.handle_density_plot,
+    ("viz", "strip_plot"):         VizHandler.handle_strip_plot,
     # Feature
     ("feature", "feature_importance"):  FeatureHandler.handle_feature_importance,
     ("feature", "pca"):                 FeatureHandler.handle_pca,
@@ -115,6 +120,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "frequency_encode"):    FeatureHandler.handle_frequency_encode,
     ("feature", "cyclical_encode"):     FeatureHandler.handle_cyclical_encode,
     ("feature", "sqrt_transform"):      FeatureHandler.handle_sqrt_transform,
+    ("feature", "mutual_info"):         FeatureHandler.handle_mutual_info,
 }
 
 
