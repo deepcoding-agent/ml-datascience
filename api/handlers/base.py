@@ -47,22 +47,6 @@ def translate_thai_keywords(message: str) -> str:
     return " ".join(result.split())
 
 
-# ── Visualization triggers ────────────────────────────────────────────────────
-
-VISUALIZATION_TRIGGERS = frozenset({
-    "plot", "chart", "graph", "visualize", "visualise", "visualization",
-    "histogram", "scatter", "bar chart", "line chart", "box plot",
-    "pie chart", "heatmap", "violin", "pairplot", "treemap", "sunburst",
-    "วิซ", "กราฟ", "แท่ง", "พล็อต",
-})
-
-
-def has_visualization_intent(message: str) -> bool:
-    """Return True if the message asks for a chart/plot."""
-    msg = message.lower()
-    return any(t in msg for t in VISUALIZATION_TRIGGERS)
-
-
 # ── Useless column filter ────────────────────────────────────────────────────
 
 _ID_PATTERNS = frozenset({"id", "index", "key", "row", "num", "number", "seq", "serial"})
@@ -80,21 +64,6 @@ def get_useless_columns(df: pd.DataFrame) -> set[str]:
             # "Id", "idx" but NOT "SalePrice" or "BedroomAbvGr"
             useless.add(col)
     return useless
-
-
-# ── Smart chart type selection ────────────────────────────────────────────────
-
-def select_chart_type(df: pd.DataFrame, col: str) -> str:
-    """Pick the best chart type based on column characteristics."""
-    if col not in df.columns:
-        return "bar"
-    n_unique = df[col].nunique()
-    dtype = str(df[col].dtype)
-    if "datetime" in dtype:
-        return "line"
-    if dtype in ("int64", "float64"):
-        return "bar" if n_unique <= 20 else "histogram"
-    return "bar"  # categorical → bar
 
 
 # ── Base handler class ────────────────────────────────────────────────────────
