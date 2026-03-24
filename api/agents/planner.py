@@ -37,10 +37,27 @@ Rules:
    - If result is a distribution, count, or comparison → YES add chart step
    - If result is a single number or text answer → NO chart needed
    - If result is a new dataset → YES add preview chart step
-6. Use pre-built handlers when they fit exactly
-7. Generate custom code for anything not covered by handlers
-8. Never refuse a task — always find a way to do it
-9. If the user speaks Thai, still plan in English — Thai keywords are translated
+6. Never refuse a task — always find a way to do it
+7. If the user speaks Thai, still plan in English — Thai keywords are translated
+
+## STEP ROUTING RULE — IMPORTANT
+
+If step produces a CHART → set produces="chart", add_visualization=true
+  The system will automatically use the best viz handler or generate chart code.
+  You do NOT need to specify handler names for viz steps.
+  Just set the visualization_type correctly:
+  bar | histogram | pie | scatter | line | box | heatmap | violin
+
+If step produces a DATAFRAME (transform/clean/generate) → set produces="dataframe"
+  The system will generate custom Python code for this step.
+  Describe what the code should do in custom_code_description.
+
+If step produces TEXT/STATS → set produces="text"
+  The system will generate custom Python code for this step.
+  Describe what the code should do in custom_code_description.
+
+NEVER set use_handler or handler_category for non-viz steps.
+All non-viz logic runs through AI code generation.
 
 ## OUTPUT FORMAT — JSON ONLY
 {{
@@ -50,14 +67,11 @@ Rules:
     {{
       "step_num": 1,
       "description": "what this step does",
-      "use_handler": "handler_name or null",
-      "handler_category": "stats | clean | transform | viz | feature | null",
-      "handler_params": {{}},
-      "needs_custom_code": true/false,
-      "custom_code_description": "what code to write if needs_custom_code is true",
+      "custom_code_description": "what the Python code should do (required for dataframe/text steps)",
       "produces": "dataframe | chart | text | number",
       "add_visualization": true/false,
-      "visualization_type": "bar | histogram | pie | scatter | line | box | heatmap | null"
+      "visualization_type": "bar | histogram | pie | scatter | line | box | heatmap | violin | null",
+      "handler_params": {{}}
     }}
   ],
   "final_output": "what the user will see at the end"
@@ -73,11 +87,7 @@ Request: "generate random null to dataset"
     {{
       "step_num": 1,
       "description": "Inject ~15% random NaN values into all columns",
-      "use_handler": "inject_null",
-      "handler_category": "transform",
-      "handler_params": {{"value": 15}},
-      "needs_custom_code": false,
-      "custom_code_description": null,
+      "custom_code_description": "Copy df, randomly set 15% of cells in each column to NaN using np.random.choice, assign to result, print null counts and percentage",
       "produces": "dataframe",
       "add_visualization": true,
       "visualization_type": "bar"
@@ -94,11 +104,7 @@ Request: "how many rows and columns"
     {{
       "step_num": 1,
       "description": "Get dataset shape (rows and columns)",
-      "use_handler": "shape",
-      "handler_category": "stats",
-      "handler_params": {{}},
-      "needs_custom_code": false,
-      "custom_code_description": null,
+      "custom_code_description": "Print the number of rows and columns in df using df.shape",
       "produces": "text",
       "add_visualization": false,
       "visualization_type": null
@@ -114,12 +120,8 @@ Request: "split price into 5 levels and show percent of each"
   "steps": [
     {{
       "step_num": 1,
-      "description": "Use pd.cut to bin SalePrice into 5 equal ranges and calculate count + percentage per level",
-      "use_handler": null,
-      "handler_category": null,
-      "handler_params": {{}},
-      "needs_custom_code": true,
-      "custom_code_description": "Bin SalePrice into 5 ranges with pd.cut, count each bin, calculate percentage, store as result_df with columns Range/Count/Percentage",
+      "description": "Bin SalePrice into 5 equal ranges and calculate count + percentage per level",
+      "custom_code_description": "Use pd.cut on SalePrice with bins=5, count each bin, calculate percentage, store as result with columns Range/Count/Percentage. Format bin labels as human-readable (e.g. 34K-154K)",
       "produces": "dataframe",
       "add_visualization": true,
       "visualization_type": "bar"
@@ -135,12 +137,8 @@ Request: "remove duplicates then fill missing values with median"
   "steps": [
     {{
       "step_num": 1,
-      "description": "Remove duplicate rows",
-      "use_handler": "remove_duplicates",
-      "handler_category": "clean",
-      "handler_params": {{}},
-      "needs_custom_code": false,
-      "custom_code_description": null,
+      "description": "Remove duplicate rows from the dataset",
+      "custom_code_description": "Drop duplicate rows from df, assign to result, print how many duplicates were removed",
       "produces": "dataframe",
       "add_visualization": false,
       "visualization_type": null
@@ -148,17 +146,30 @@ Request: "remove duplicates then fill missing values with median"
     {{
       "step_num": 2,
       "description": "Fill missing values with median for numeric columns",
-      "use_handler": "fill_nulls",
-      "handler_category": "clean",
-      "handler_params": {{"strategy": "median"}},
-      "needs_custom_code": false,
-      "custom_code_description": null,
+      "custom_code_description": "Fill NaN values in numeric columns with their median, assign to result, print how many values were filled per column",
       "produces": "dataframe",
       "add_visualization": false,
       "visualization_type": null
     }}
   ],
   "final_output": "Cleaned dataset with duplicates removed and missing values filled with median"
+}}
+
+Request: "show pie chart of bedroom counts"
+{{
+  "understanding": "User wants a pie chart showing the distribution of bedroom counts",
+  "output_type": "query",
+  "steps": [
+    {{
+      "step_num": 1,
+      "description": "Create pie chart of bedroom distribution",
+      "produces": "chart",
+      "add_visualization": true,
+      "visualization_type": "pie",
+      "handler_params": {{"column": "BedroomAbvGr"}}
+    }}
+  ],
+  "final_output": "Pie chart showing bedroom count distribution"
 }}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation outside JSON.

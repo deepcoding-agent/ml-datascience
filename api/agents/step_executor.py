@@ -1,6 +1,8 @@
 """Step Executor — runs each step from the AI planner's plan.
 
-Uses pre-built handlers when available, generates code for the rest.
+Routing rule:
+  - Viz steps → try viz handler from HANDLER_REGISTRY, codegen fallback
+  - All other steps → always AI codegen (never use handlers)
 Chains step results: each step receives the DataFrame from the previous step.
 """
 from __future__ import annotations
@@ -26,9 +28,10 @@ def execute_plan(
 ) -> dict:
     """Execute each step in the plan sequentially.
 
-    Returns combined result dict with final_df, charts, stdout, etc.
+    Viz steps use handlers (with codegen fallback).
+    All other steps always use AI codegen.
     """
-    current_df = df.copy()
+    current_df = df.copy() if df is not None else None
     all_charts: list[str] = []
     all_stdout: list[str] = []
     final_df: pd.DataFrame | None = None
@@ -39,39 +42,25 @@ def execute_plan(
     for step in plan.get("steps", []):
         step_num = step.get("step_num", "?")
         description = step.get("description", "")
-        use_handler = step.get("use_handler")
-        handler_category = step.get("handler_category")
-        handler_params = step.get("handler_params") or {}
-        needs_custom_code = step.get("needs_custom_code", False)
         produces = step.get("produces", "text")
         add_viz = step.get("add_visualization", False)
         viz_type = step.get("visualization_type") or "bar"
+        is_viz_step = produces == "chart" or (add_viz and produces != "dataframe" and produces != "text")
 
         log.info("  Step %s: %s", step_num, description[:80])
 
-        step_result: HandlerResult | None = None
+        result_charts: list[str] = []
+        result_df: pd.DataFrame | None = None
+        result_stdout = ""
+        step_success = True
 
-        # ── Try pre-built handler first ──────────────────────────────────
-        if use_handler and not needs_custom_code:
-            handler_fn = _find_handler(use_handler, handler_category)
-
-            if handler_fn:
-                log.info("    handler: %s/%s", handler_category, use_handler)
-                try:
-                    step_result = handler_fn(current_df, handler_params)
-                    if not step_result.success:
-                        log.info("    handler returned success=False, falling through to codegen")
-                        step_result = None
-                except Exception as e:
-                    log.info("    handler raised %s, falling through to codegen", e)
-                    step_result = None
-
-        # ── Fallback: generate and execute custom code ───────────────────
-        # Triggers when: handler missing, handler failed, handler returned
-        # success=False, or needs_custom_code was set by the planner.
-        if step_result is None or needs_custom_code:
-            log.info("    generating custom code")
+        if is_viz_step:
+            # ── Viz step: try handler first, codegen fallback ────────────
+            result_charts = _run_viz_step(step, current_df, viz_type, df_context, llm, all_code)
+        else:
+            # ── Non-viz step: always AI codegen ──────────────────────────
             code_desc = step.get("custom_code_description") or description
+            log.info("    codegen: %s", code_desc[:60])
 
             code = generate_step_code(
                 step_description=code_desc,
@@ -82,7 +71,7 @@ def execute_plan(
             )
             all_code.append(code)
 
-            stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(
+            stdout, sandbox_result_df, chart_b64, sandbox_df, chart_json = run_code(
                 code, current_df
             )
 
@@ -98,39 +87,28 @@ def execute_plan(
                     previous_error=stdout,
                 )
                 all_code.append(retry_code)
-                stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(
+                stdout, sandbox_result_df, chart_b64, sandbox_df, chart_json = run_code(
                     retry_code, current_df
                 )
 
-            charts_from_sandbox = [chart_json] if chart_json else []
-            step_result = HandlerResult(
-                success=not stdout.startswith("Code execution error"),
-                result_df=result_df,
-                charts_plotly=charts_from_sandbox,
-                stdout=stdout,
-                output_type=output_type,
-                error=stdout if stdout.startswith("Code execution error") else None,
-                metadata={"code": code, "chart_image": chart_b64},
-            )
+            result_df = sandbox_result_df
+            result_stdout = stdout
+            if chart_json:
+                result_charts.append(chart_json)
+            step_success = not stdout.startswith("Code execution error")
 
-        if step_result is None:
-            continue
+        # ── Collect outputs ──────────────────────────────────────────────
+        if result_df is not None:
+            current_df = result_df
+            final_df = result_df
+        if result_charts:
+            all_charts.extend(result_charts)
+        if result_stdout:
+            all_stdout.append(result_stdout)
 
-        # ── Collect step outputs ─────────────────────────────────────────
-        if step_result.result_df is not None:
-            current_df = step_result.result_df
-            final_df = step_result.result_df
-
-        if step_result.charts_plotly:
-            all_charts.extend(step_result.charts_plotly)
-
-        if step_result.stdout:
-            all_stdout.append(step_result.stdout)
-
-        # ── Auto-add visualization if planned ────────────────────────────
-        if add_viz and not step_result.charts_plotly:
-            target_df = step_result.result_df if step_result.result_df is not None else current_df
-            chart = _auto_visualize(target_df, viz_type, description)
+        # ── Auto viz if step needs chart but none produced yet ───────────
+        if add_viz and not result_charts and current_df is not None:
+            chart = _auto_visualize(current_df, viz_type, description)
             if chart:
                 all_charts.append(chart)
 
@@ -138,7 +116,7 @@ def execute_plan(
             {
                 "step": step_num,
                 "description": description,
-                "success": step_result.success,
+                "success": step_success,
                 "produced": produces,
             }
         )
@@ -154,22 +132,113 @@ def execute_plan(
     }
 
 
-def _find_handler(handler_name: str, category: str | None):
-    """Look up a handler in the registry by name and optional category."""
-    # Direct match by (category, sub_intent)
-    if category:
-        fn = HANDLER_REGISTRY.get((category, handler_name))
-        if fn:
+# ── Viz step execution ───────────────────────────────────────────────────────
+
+def _run_viz_step(
+    step: dict,
+    current_df: pd.DataFrame,
+    viz_type: str,
+    df_context: str,
+    llm,
+    all_code: list[str],
+) -> list[str]:
+    """Execute a visualization step. Try handler first, codegen fallback."""
+    # Find matching viz handler
+    handler_fn = _find_viz_handler(viz_type)
+
+    if handler_fn and current_df is not None:
+        log.info("    viz handler: %s", viz_type)
+        try:
+            handler_params = {
+                "column": step.get("handler_params", {}).get("column")
+                          or step.get("column"),
+                "columns": step.get("handler_params", {}).get("columns", []),
+                "percentage": step.get("handler_params", {}).get("percentage", False),
+            }
+            result = handler_fn(current_df, handler_params)
+            if result.success and result.charts_plotly:
+                return result.charts_plotly
+            log.info("    viz handler returned no charts, falling through to codegen")
+        except Exception as e:
+            log.info("    viz handler raised %s, falling through to codegen", e)
+
+    # Codegen fallback for viz
+    return _codegen_viz(step, current_df, df_context, llm, all_code)
+
+
+def _find_viz_handler(viz_type: str):
+    """Look up a viz handler in the registry by viz_type."""
+    # Direct match
+    fn = HANDLER_REGISTRY.get(("viz", viz_type))
+    if fn:
+        return fn
+
+    # Fuzzy: "bar" → "bar_chart", "line" → "line_chart"
+    suffixed = f"{viz_type}_chart"
+    fn = HANDLER_REGISTRY.get(("viz", suffixed))
+    if fn:
+        return fn
+
+    # Fuzzy: "box" → "box_plot"
+    suffixed_plot = f"{viz_type}_plot"
+    fn = HANDLER_REGISTRY.get(("viz", suffixed_plot))
+    if fn:
+        return fn
+
+    # Scan all viz entries
+    for (cat, sub), fn in HANDLER_REGISTRY.items():
+        if cat == "viz" and (sub == viz_type or viz_type in sub):
             return fn
 
-    # Fuzzy match: try all entries
-    for (cat, sub), fn in HANDLER_REGISTRY.items():
-        if sub == handler_name:
-            return fn
-        if f"handle_{sub}" == handler_name:
-            return fn
     return None
 
+
+def _codegen_viz(
+    step: dict,
+    current_df: pd.DataFrame,
+    df_context: str,
+    llm,
+    all_code: list[str],
+) -> list[str]:
+    """Generate and execute code for a viz step. Returns list of plotly JSON."""
+    code_desc = step.get("custom_code_description") or step.get("description", "")
+    log.info("    viz codegen: %s", code_desc[:60])
+
+    code = generate_step_code(
+        step_description=code_desc,
+        df_context=df_context,
+        current_df=current_df,
+        produces="chart",
+        llm=llm,
+    )
+    all_code.append(code)
+
+    stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(code, current_df)
+    if chart_json:
+        return [chart_json]
+
+    # Retry once
+    if stdout.startswith("Code execution error"):
+        log.info("    viz codegen retry: %s", stdout[:100])
+        retry_code = generate_step_code(
+            step_description=code_desc,
+            df_context=df_context,
+            current_df=current_df,
+            produces="chart",
+            llm=llm,
+            previous_error=stdout,
+        )
+        all_code.append(retry_code)
+        stdout, result_df, chart_b64, sandbox_df, chart_json = run_code(
+            retry_code, current_df
+        )
+        if chart_json:
+            return [chart_json]
+
+    return []
+
+
+# ── Bin/range formatting helpers ─────────────────────────────────────────────
 
 def _format_bin_label(interval) -> str:
     """Convert a pandas Interval to a human-readable string like '34K – 154K'."""
@@ -193,17 +262,17 @@ def _looks_like_range(series: pd.Series) -> bool:
 
 def _clean_chart_title(description: str) -> str:
     """Derive a clean chart title from a step description."""
-    # Strip common code-style prefixes
     for prefix in ("Use pd.cut to ", "Calculate ", "Compute ", "Generate ", "Create "):
         if description.startswith(prefix):
             description = description[len(prefix):]
             break
-    # Capitalise first letter, cap length
     title = description[:60].strip().rstrip(".")
     if title:
         title = title[0].upper() + title[1:]
     return title or "Distribution"
 
+
+# ── Auto-visualize fallback ──────────────────────────────────────────────────
 
 def _auto_visualize(
     df: pd.DataFrame,
@@ -244,7 +313,6 @@ def _auto_visualize(
 
         n_unique = plot_df[x_col].nunique() if x_col in plot_df.columns else 10
 
-        # Auto-select best viz type if pie requested but too many categories
         if viz_type == "pie" and n_unique > 10:
             viz_type = "bar"
 
@@ -274,7 +342,6 @@ def _auto_visualize(
             else:
                 return None
         else:
-            # Default bar
             fig = px.bar(plot_df, x=x_col, y=y_col, title=title, text=y_col)
             fig.update_traces(
                 texttemplate="%{text:,}",
@@ -282,7 +349,6 @@ def _auto_visualize(
                 marker_color="#FB8C3C",
             )
 
-        # Common layout — horizontal tick labels, thousands separators
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
