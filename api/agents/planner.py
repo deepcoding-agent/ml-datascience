@@ -29,6 +29,14 @@ HANDLER_CATALOG = """\
 | stats.skewness | skewness per numeric column | (none) |
 | stats.outlier_report | IQR-based outlier detection | (none) |
 | stats.duplicate_report | duplicate row count + sample | (none) |
+| stats.cross_tab | contingency table between 2 columns + heatmap | columns (list of 2), normalize? |
+| stats.percentile | custom percentile report (p1, p5, p10...p99) | column?, quantiles? |
+| stats.normality_test | Shapiro-Wilk normality test per column | column? |
+| stats.class_balance | target class distribution + balance check | column? |
+| stats.top_correlations | top N most correlated feature pairs | n? (default 10) |
+| stats.kurtosis | kurtosis per numeric column | (none) |
+| stats.zero_report | count zeros/empty values per column | (none) |
+| stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low) | (none) |
 
 ### Clean (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
