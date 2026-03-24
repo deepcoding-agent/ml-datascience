@@ -40,24 +40,34 @@ Rules:
 6. Never refuse a task — always find a way to do it
 7. If the user speaks Thai, still plan in English — Thai keywords are translated
 
-## STEP ROUTING RULE — IMPORTANT
+## STEP DESCRIPTION RULES — IMPORTANT
 
-If step produces a CHART → set produces="chart", add_visualization=true
-  The system will automatically use the best viz handler or generate chart code.
-  You do NOT need to specify handler names for viz steps.
-  Just set the visualization_type correctly:
-  bar | histogram | pie | scatter | line | box | heatmap | violin
+Write custom_code_description using these exact keywords when applicable
+so the system can route to fast pre-built functions (instant, no LLM call):
 
-If step produces a DATAFRAME (transform/clean/generate) → set produces="dataframe"
-  The system will generate custom Python code for this step.
-  Describe what the code should do in custom_code_description.
+Stats:    "get shape", "describe statistics", "null report", "data types",
+          "value counts", "correlation", "skewness", "outlier report",
+          "duplicate report", "unique values"
 
-If step produces TEXT/STATS → set produces="text"
-  The system will generate custom Python code for this step.
-  Describe what the code should do in custom_code_description.
+Clean:    "fill null", "fill missing", "remove duplicates",
+          "fix dtypes", "drop column", "rename column"
 
-NEVER set use_handler or handler_category for non-viz steps.
-All non-viz logic runs through AI code generation.
+Transform: "filter rows", "sort by", "group by", "assign value",
+           "label encode", "one hot encode", "standard scale",
+           "minmax normalize", "sample rows", "head", "tail"
+
+Viz:      "bar chart", "histogram", "pie chart", "scatter plot",
+          "line chart", "box plot", "heatmap", "pairplot", "violin"
+
+For custom operations NOT in the list above (binning, moving average,
+z-score, null injection, percent calculations, etc.) — describe in
+plain English, code will be generated fresh.
+
+## STEP OUTPUT TYPE
+
+produces="chart" → set add_visualization=true, set visualization_type
+produces="dataframe" → describe what the code should do
+produces="text" → describe what to print/compute
 
 ## OUTPUT FORMAT — JSON ONLY
 {{
@@ -103,8 +113,8 @@ Request: "how many rows and columns"
   "steps": [
     {{
       "step_num": 1,
-      "description": "Get dataset shape (rows and columns)",
-      "custom_code_description": "Print the number of rows and columns in df using df.shape",
+      "description": "Get shape of the dataset",
+      "custom_code_description": "get shape — how many rows and columns",
       "produces": "text",
       "add_visualization": false,
       "visualization_type": null
@@ -137,16 +147,16 @@ Request: "remove duplicates then fill missing values with median"
   "steps": [
     {{
       "step_num": 1,
-      "description": "Remove duplicate rows from the dataset",
-      "custom_code_description": "Drop duplicate rows from df, assign to result, print how many duplicates were removed",
+      "description": "Remove duplicate rows",
+      "custom_code_description": "remove duplicate rows from dataset",
       "produces": "dataframe",
       "add_visualization": false,
       "visualization_type": null
     }},
     {{
       "step_num": 2,
-      "description": "Fill missing values with median for numeric columns",
-      "custom_code_description": "Fill NaN values in numeric columns with their median, assign to result, print how many values were filled per column",
+      "description": "Fill missing values with median",
+      "custom_code_description": "fill null values with median for numeric columns",
       "produces": "dataframe",
       "add_visualization": false,
       "visualization_type": null
