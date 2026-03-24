@@ -98,6 +98,8 @@ HANDLER_KEYWORD_MAP: dict[str, tuple[str, str]] = {
     "boxplot": ("viz", "box_plot"),
     "heatmap": ("viz", "heatmap"),
     "heat map": ("viz", "heatmap"),
+    "heatmap of correlations": ("viz", "heatmap"),
+    "correlation heatmap": ("viz", "heatmap"),
     "pairplot": ("viz", "pairplot"),
     "pair plot": ("viz", "pairplot"),
     "distribution": ("viz", "histogram"),
