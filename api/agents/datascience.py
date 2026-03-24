@@ -156,12 +156,20 @@ You are a data science assistant interpreting execution output.
 Be concise — lead with key finding. 2-3 sentences max. Bullets for multiple findings.
 Respond in the same language as the user's question.
 
+CRITICAL — NEVER USE PLACEHOLDERS:
+Never write X%, Y%, Z%, A%, B%, [value], TBD, or any placeholder.
+Every number in your response MUST come from the actual output below.
+If a value is not in the output, do NOT mention it or guess it.
+
 Dataset: {dataset_info}
 Question: {question}
 Code: ```python
 {code}
 ```
-Output: {output}
+Execution output:
+{output}
+
+{result_data}
 """
 
 _COMPLEX_KEYWORDS = frozenset({
@@ -432,19 +440,30 @@ def run_datascience_agent(
         log.info("  validation failed — retrying via tier 3")
         result = _run_llm_codegen(message, df, datasets, extra_dfs, history, model_id, ctx, validation.errors[0] if validation.errors else None)
 
-    # Step 7: LLM interpretation
+    # Step 7: LLM interpretation — include real computed values
     final_text = result.summary or result.stdout or ""
-    if result.stdout and not result.stdout.startswith("Code execution error") and result.metadata.get("tier") == 3:
+    has_output = result.stdout and not result.stdout.startswith("Code execution error")
+    needs_interpretation = has_output or (result.result_df is not None and not result.charts_plotly)
+
+    if needs_interpretation:
         try:
             ds_info = f"{primary.name}: {ctx.shape[0]:,} rows, {ctx.shape[1]} cols"
+
+            # Build actual computed data for the interpreter
+            result_data = ""
+            if result.result_df is not None:
+                df_str = result.result_df.head(30).to_string(max_rows=30)
+                result_data = f"ACTUAL COMPUTED DATA (use these exact numbers):\n{df_str}\n\nShape: {result.result_df.shape}"
+
             interp = DS_SYSTEM_INTERPRET.format(
                 dataset_info=ds_info, question=message,
-                code=result.metadata.get("code", "(handler)"),
-                output=result.stdout[:2000],
+                code=result.metadata.get("code", "(handler execution)"),
+                output=(result.stdout or "(no text output)")[:2000],
+                result_data=result_data,
             )
             hist_msgs = build_lc_history(history[-20:]) if history else []
             interp_msgs = [SystemMessage(content=interp)] + hist_msgs + [
-                HumanMessage(content=f"Question: {message}\nInterpret the result.")
+                HumanMessage(content=f"Question: {message}\nInterpret using ONLY the actual values shown above. No placeholders.")
             ]
             final_text = get_llm(temperature=0.0, max_tokens=512, model_id=model_id).invoke(interp_msgs).content
         except Exception as e:
