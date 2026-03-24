@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
     message: str
     datasets: list[DatasetPayload] = []
     conversation_history: list[ChatMessage] = []
+    model_id: str | None = None            # e.g. "gpt-4o-mini", "claude-sonnet-4-5"
 
 
 class ChatResponse(BaseModel):
@@ -29,6 +30,16 @@ class ChatResponse(BaseModel):
     artifacts: dict = {}
     output_type: str = "text"              # text|table|chart|dataset|chart+dataset
     should_activate: bool = False          # frontend should auto-switch to new dataset
+    model_used: str | None = None          # echo back which model was used
+
+
+class ModelInfo(BaseModel):
+    """Used by GET /models endpoint."""
+    id: str
+    label: str
+    provider: str                          # "openai" | "anthropic"
+    badge: str                             # "Fast" | "Smart" | "Powerful"
+    available: bool = False
 
 
 # ── Suggest target ────────────────────────────────────────────────────────────

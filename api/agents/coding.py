@@ -15,8 +15,8 @@ Keep explanations to 2-3 sentences unless the topic genuinely requires more.
 """
 
 
-def run_coding_agent(message: str, history: list[ChatMessage]) -> str:
-    llm = get_llm(temperature=0.3, max_tokens=1024)
+def run_coding_agent(message: str, history: list[ChatMessage], model_id: str | None = None) -> str:
+    llm = get_llm(temperature=0.3, max_tokens=1024, model_id=model_id)
     msgs = (
         [SystemMessage(content=CODING_SYSTEM)]
         + build_lc_history(history[-20:])

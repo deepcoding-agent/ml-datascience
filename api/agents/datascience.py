@@ -283,6 +283,7 @@ def run_datascience_agent(
     message: str,
     datasets: list[DatasetPayload],
     history: list[ChatMessage],
+    model_id: str | None = None,
 ) -> tuple[str, dict]:
     import time
     t0 = time.perf_counter()
@@ -332,7 +333,7 @@ def run_datascience_agent(
                          "compare models", "cross validation", "confusion matrix"}
     is_complex = any(kw in message.lower() for kw in _COMPLEX_KEYWORDS)
     step1_tokens = 2048 if is_complex else 1024
-    llm_step1 = get_llm(temperature=0.0, max_tokens=step1_tokens)
+    llm_step1 = get_llm(temperature=0.0, max_tokens=step1_tokens, model_id=model_id)
     msgs = (
         [SystemMessage(content=system_prompt)]
         + history_msgs
@@ -393,7 +394,7 @@ def run_datascience_agent(
             AIMessage(content=step1_reply),
             HumanMessage(content=fix_prompt),
         ]
-        llm_retry = get_llm(temperature=0.0, max_tokens=1024)
+        llm_retry = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id)
         retry_reply = llm_retry.invoke(retry_msgs).content
         retry_blocks = extract_code_blocks(retry_reply)
 
@@ -447,7 +448,7 @@ def run_datascience_agent(
             + history_msgs
             + [HumanMessage(content=f"Original question: {message}\nInterpret the execution output above.")]
         )
-        llm_step2 = get_llm(temperature=0.0, max_tokens=512)
+        llm_step2 = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
         final_text = llm_step2.invoke(interp_msgs).content
         log.info("  [5/5] LLM step-2 done  (%.1fs)", time.perf_counter() - t_llm2)
     else:
@@ -498,7 +499,7 @@ def run_datascience_agent(
 
     if real_output == "generate" and rows_data is not None:
         # Save as new dataset — user asked to create/modify data
-        dataset_name = _generate_dataset_name(message)
+        dataset_name = _generate_dataset_name(message, model_id=model_id)
         artifacts["data_wrangled"] = rows_data
         artifacts["dataset_name"] = dataset_name
         artifacts["dataset_shape"] = {"rows": len(result_df), "cols": len(result_df.columns)}
@@ -528,10 +529,10 @@ def run_datascience_agent(
     return final_text, artifacts
 
 
-def _generate_dataset_name(message: str) -> str:
+def _generate_dataset_name(message: str, model_id: str | None = None) -> str:
     """Ask the LLM for a short snake_case name for the generated dataset."""
     try:
-        llm_name = get_llm(temperature=0.0, max_tokens=50)
+        llm_name = get_llm(temperature=0.0, max_tokens=50, model_id=model_id)
         reply = llm_name.invoke([HumanMessage(
             content=(
                 f"Generate a short snake_case dataset name (max 5 words, no spaces) "
