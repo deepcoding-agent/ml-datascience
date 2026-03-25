@@ -159,6 +159,34 @@ HANDLER_CATALOG = """\
 | viz.qq_plot | QQ plot for normality check | column? |
 | viz.density_plot | KDE density plot | column?, group? |
 | viz.strip_plot | jitter/strip showing individual points | column?, group? |
+| viz.donut_chart | donut chart (pie with hole) | column? |
+| viz.grouped_bar | grouped bar chart (2 categoricals side-by-side) | columns? (list: [x, color]) |
+| viz.percent_bar | 100% stacked bar chart (proportions) | columns? (list: [x, color]) |
+| viz.pareto_chart | pareto chart (bar + cumulative line) | column? |
+| viz.waterfall_chart | waterfall chart (incremental changes) | column?, category? |
+| viz.funnel_chart | funnel chart (stages/flow) | column? |
+| viz.radar_chart | radar/spider chart (normalized means) | (none, uses up to 8 numeric cols) |
+| viz.lollipop_chart | lollipop chart (dot + stem line) | column? |
+| viz.dual_axis | dual Y-axis chart (two numeric cols) | columns? (list: [y1, y2]) |
+| viz.histogram_2d | 2D histogram / density heatmap | columns? (list: [x, y]) |
+| viz.ecdf_plot | empirical cumulative distribution function | column? |
+| viz.step_chart | step chart (discrete steps) | column? |
+| viz.error_bar_chart | bar chart with std error bars | column? (numeric), group? (categorical) |
+| viz.ridgeline | ridgeline/joy plot (overlapping distributions) | column? (numeric), group? (categorical) |
+| viz.dot_plot | Cleveland dot plot | column? (categorical), value? (numeric) |
+| viz.polar_chart | polar/radial bar chart | column? |
+| viz.sankey_chart | Sankey flow diagram between 2 categoricals | columns? (list: [source, target]) |
+| viz.candlestick | candlestick/OHLC chart | open?, high?, low?, close? |
+| viz.contour_plot | contour density plot of 2 numeric cols | columns? (list: [x, y]) |
+| viz.cumulative_line | cumulative sum line chart | column? |
+| viz.null_bar | null percentage per column bar chart | (none) |
+| viz.top_n_bar | top N values bar chart | column?, n? (default 10) |
+| viz.correlation_scatter | scatter with trendline and R value | columns? (list: [x, y]) |
+| viz.range_plot | range/band plot (min-max over categories) | column? (numeric), group? (categorical) |
+| viz.swarm_plot | jitter/swarm plot with better spread | column?, group? |
+| viz.comparison_bar | side-by-side comparison of 2 numeric cols | columns? (list: [a, b]) |
+| viz.marimekko | Marimekko/mosaic chart (variable-width bars) | columns? (list: [x, color]) |
+| viz.gauge_chart | single-value gauge chart | column?, agg? (mean/median/sum/min/max) |
 
 ### Feature Engineering
 | id | what it does | params |
