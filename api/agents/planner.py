@@ -172,20 +172,17 @@ Use codegen ONLY when NO handler in the table above can do it:
   - "query" → stats, viz, questions, any read-only operation
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
-### Smart chart selection — CHOOSE THE RIGHT CHART TYPE
-When user asks for a plot/chart/visualization without specifying exact type, pick the BEST chart:
-- "percent" / "percentage" / "proportion" / "share" / "ratio" of a categorical column (≤10 unique) → **viz.pie_chart** (NOT bar_chart)
-- "distribution" / "spread" of a numeric column → **viz.distribution** or **viz.histogram**
+### Smart chart selection — INTENT determines chart type
+Read the user's intent carefully, then pick the chart. Intent > column type.
+- "how many" / "count" / "frequency" / "number of each" → **viz.bar_chart** (shows counts clearly)
+- "percent" / "percentage" / "proportion" / "share" → **viz.pie_chart** (shows parts of whole)
+- "distribution" / "spread" / "histogram" → **viz.histogram** or **viz.distribution**
 - "compare" / "comparison" across categories → **viz.bar_chart**
 - "trend" / "over time" / time series → **viz.line_chart**
-- "relationship" / "vs" / "between" two numeric columns → **viz.scatter**
+- "relationship" / "vs" / "between" two columns → **viz.scatter**
 - "correlation" → **viz.heatmap** or **stats.correlation**
-- "outliers" / "spread" comparison across groups → **viz.box_plot**
-- "counts" / "frequency" / "how many" → **viz.count_plot** or **viz.bar_chart**
-- If user says "plot" or "chart" generically for a column:
-  - categorical with ≤6 unique → viz.pie_chart
-  - categorical with 7-20 unique → viz.bar_chart
-  - numeric → viz.histogram
+- "outliers" / "spread by group" → **viz.box_plot**
+- Generic "plot" / "show" / "chart" with no clear intent → **viz.bar_chart** for categorical, **viz.histogram** for numeric
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
@@ -268,13 +265,16 @@ User: "label encode all categorical columns"
 User: "filter rows where price > 200000"
 {{"understanding":"Filter expensive houses","output_type":"generate","steps":[{{"step_num":1,"description":"Filter SalePrice > 200000","handler":{{"id":"transform.filter","params":{{"column":"SalePrice","operator":">","value":200000}}}}}}]}}
 
-User: "plot percent of bedrooms"
-{{"understanding":"Pie chart of bedroom percentage distribution","output_type":"query","steps":[{{"step_num":1,"description":"Pie chart of bedrooms percentage","handler":{{"id":"viz.pie_chart","params":{{"column":"bedrooms"}}}}}}]}}
+User: "plot how many of each bedroom" (count intent → bar chart)
+{{"understanding":"Count of each bedroom value","output_type":"query","steps":[{{"step_num":1,"description":"Bar chart count of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"bedrooms"}}}}}}]}}
 
-User: "show distribution of price"
-{{"understanding":"Price distribution histogram","output_type":"query","steps":[{{"step_num":1,"description":"Distribution of price","handler":{{"id":"viz.distribution","params":{{"column":"price"}}}}}}]}}
+User: "show percentage of bedrooms" (percent intent → pie chart)
+{{"understanding":"Percentage breakdown of bedrooms","output_type":"query","steps":[{{"step_num":1,"description":"Pie chart of bedroom percentage","handler":{{"id":"viz.pie_chart","params":{{"column":"bedrooms"}}}}}}]}}
 
-User: "plot price vs area"
+User: "show distribution of price" (distribution intent → histogram)
+{{"understanding":"Price distribution","output_type":"query","steps":[{{"step_num":1,"description":"Distribution of price","handler":{{"id":"viz.distribution","params":{{"column":"price"}}}}}}]}}
+
+User: "plot price vs area" (relationship intent → scatter)
 {{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
