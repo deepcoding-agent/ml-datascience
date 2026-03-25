@@ -1,12 +1,16 @@
-"""AI Planner — produces structured JSON execution plans.
+"""AI Planner — two-stage routing for efficient handler selection.
 
-The planner reads the user message and dataset context, then outputs
-a structured plan where each step explicitly specifies either a
-handler (instant, 0 LLM calls) or codegen (LLM-generated code).
+Stage 1 (Router): Lightweight LLM call classifies message into
+  1-2 categories (stats/clean/transform/viz/feature/nlp/analysis)
+  or direct_answer. ~200 tokens output.
+
+Stage 2 (Planner): Full planner only sees handlers from the selected
+  categories (~50-100 handlers instead of 350). Much more accurate.
 """
 from __future__ import annotations
 
 import json
+import re as _re
 
 from api.logger import get_logger
 
@@ -612,16 +616,147 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
 
 
+# ── Stage 1: Category router ────────────────────────────────────────────────
+
+ROUTER_PROMPT = """\
+Classify this user message into 1-2 handler categories for a data-science agent.
+
+User message: "{user_message}"
+Dataset columns: {columns}
+
+Categories:
+- stats: descriptive statistics, counts, distributions, tests, reports, data info
+- clean: fix data quality, fill nulls, remove duplicates, fix types, standardize
+- transform: filter, sort, group, encode, scale, split, merge, reshape, math
+- viz: charts, plots, graphs, visualizations, show/display data visually
+- feature: feature engineering, transforms (log/pca/encode), create new features
+- nlp: text processing, tokenize, sentiment, keywords, word frequency, language
+- analysis: deep analysis, compare, cluster, anomaly detect, correlation, EDA, ML readiness
+- direct_answer: NOT about the dataset — general knowledge, casual chat, math, coding help
+
+Output ONLY a JSON object: {{"categories": ["cat1", "cat2"], "direct_answer": false}}
+Or for non-data questions: {{"categories": [], "direct_answer": true}}
+Pick 1-2 most relevant categories. No explanation."""
+
+
+def _split_catalog_by_category() -> dict[str, str]:
+    """Split HANDLER_CATALOG into per-category sections."""
+    sections: dict[str, str] = {}
+    current_key = ""
+    current_lines: list[str] = []
+
+    category_map = {
+        "Stats": "stats", "Clean": "clean", "Transform": "transform",
+        "Viz": "viz", "Feature": "feature", "NLP": "nlp", "Analysis": "analysis",
+    }
+
+    for line in HANDLER_CATALOG.split("\n"):
+        if line.startswith("### "):
+            if current_key and current_lines:
+                sections[current_key] = "\n".join(current_lines)
+            # Map header to category key
+            header = line[4:].strip()
+            current_key = ""
+            for prefix, key in category_map.items():
+                if header.startswith(prefix):
+                    current_key = key
+                    break
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    if current_key and current_lines:
+        sections[current_key] = "\n".join(current_lines)
+
+    return sections
+
+
+_CATALOG_SECTIONS: dict[str, str] = {}
+
+
+def _get_catalog_sections() -> dict[str, str]:
+    """Lazy-init catalog sections."""
+    global _CATALOG_SECTIONS
+    if not _CATALOG_SECTIONS:
+        _CATALOG_SECTIONS = _split_catalog_by_category()
+    return _CATALOG_SECTIONS
+
+
+def _route_categories(user_message: str, columns: list[str], llm) -> tuple[list[str], bool]:
+    """Stage 1: Lightweight LLM call to classify intent into categories."""
+    prompt = ROUTER_PROMPT.format(
+        user_message=user_message,
+        columns=", ".join(columns[:15]),
+    )
+
+    try:
+        response = llm.invoke(prompt)
+        raw = response.content.strip()
+        if "```" in raw:
+            raw = raw.split("```json")[-1].split("```")[0].strip() if "```json" in raw else raw.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(raw)
+        categories = result.get("categories", [])
+        direct = result.get("direct_answer", False)
+
+        valid_cats = {"stats", "clean", "transform", "viz", "feature", "nlp", "analysis"}
+        categories = [c for c in categories if c in valid_cats]
+
+        log.info("  router → categories=%s, direct_answer=%s", categories, direct)
+        return categories, bool(direct)
+    except Exception as e:
+        log.warning("  router failed (%s), falling back to full catalog", e)
+        return [], False
+
+
+def _build_focused_catalog(categories: list[str]) -> str:
+    """Build a catalog containing only the selected categories."""
+    sections = _get_catalog_sections()
+    if not categories:
+        return HANDLER_CATALOG  # fallback to full catalog
+
+    parts = [sections[cat] for cat in categories if cat in sections]
+    return "\n\n".join(parts)
+
+
+# ── Stage 2: Focused planner ───────────────────────────────────────────────
+
 def plan_steps(
     user_message: str,
     df_context: str,
     llm,
 ) -> dict:
-    """Ask LLM to plan execution steps. Returns structured plan dict."""
+    """Two-stage planning: route → focused plan.
+
+    Stage 1: Lightweight router classifies into 1-2 categories (~200 tokens)
+    Stage 2: Planner sees only relevant handlers (~50-100 instead of 350)
+    """
+    # Extract column names for router
+    col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
+    columns = col_match[:15] if col_match else []
+
+    # Stage 1: Route
+    router_llm = type(llm).__call__  # reuse same LLM instance
+    categories, is_direct = _route_categories(user_message, columns, llm)
+
+    if is_direct:
+        log.info("  router → direct_answer")
+        return {
+            "understanding": "Not about the dataset",
+            "output_type": "text",
+            "direct_answer": True,
+            "steps": [],
+        }
+
+    # Stage 2: Build focused catalog and plan
+    focused_catalog = _build_focused_catalog(categories)
+    handler_count = focused_catalog.count("| ")
+    log.info("  focused catalog: %d categories, ~%d handler rows", len(categories), handler_count // 3)
+
     prompt = PLANNER_PROMPT.format(
         user_message=user_message,
         df_context=df_context,
-        handler_catalog=HANDLER_CATALOG,
+        handler_catalog=focused_catalog,
     )
 
     response = llm.invoke(prompt)
