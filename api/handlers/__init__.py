@@ -11,6 +11,7 @@ from api.handlers.clean_handler import CleanHandler
 from api.handlers.transform_handler import TransformHandler
 from api.handlers.viz_handler import VizHandler
 from api.handlers.feature_handler import FeatureHandler
+from api.handlers.nlp_handler import NlpHandler
 
 HandlerFunc = Callable[[pd.DataFrame, dict], HandlerResult]
 
@@ -126,6 +127,22 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "quantile_transform"):  FeatureHandler.handle_quantile_transform,
     ("feature", "diff_features"):       FeatureHandler.handle_diff_features,
     ("feature", "aggregation_features"):FeatureHandler.handle_aggregation_features,
+    # NLP / Text preprocessing
+    ("nlp", "text_clean"):           NlpHandler.handle_text_clean,
+    ("nlp", "remove_stopwords"):     NlpHandler.handle_remove_stopwords,
+    ("nlp", "tokenize"):             NlpHandler.handle_tokenize,
+    ("nlp", "tfidf"):                NlpHandler.handle_tfidf,
+    ("nlp", "bow"):                  NlpHandler.handle_bow,
+    ("nlp", "ngrams"):               NlpHandler.handle_ngrams,
+    ("nlp", "regex_extract"):        NlpHandler.handle_regex_extract,
+    ("nlp", "sentiment_score"):      NlpHandler.handle_sentiment_score,
+    ("nlp", "word_frequency"):       NlpHandler.handle_word_frequency,
+    ("nlp", "text_similarity"):      NlpHandler.handle_text_similarity,
+    ("nlp", "vocab_stats"):          NlpHandler.handle_vocab_stats,
+    ("nlp", "text_normalize"):       NlpHandler.handle_text_normalize,
+    ("nlp", "language_detect"):      NlpHandler.handle_language_detect,
+    ("nlp", "hash_vectorize"):       NlpHandler.handle_hash_vectorize,
+    ("nlp", "text_encode"):          NlpHandler.handle_text_encode,
 }
 
 

@@ -138,6 +138,25 @@ HANDLER_CATALOG = """\
 | feature.quantile_transform | map values to uniform/normal distribution | column?, distribution? (normal/uniform) |
 | feature.diff_features | create difference features (first/second order) | column?, periods? (default 1) |
 | feature.aggregation_features | group-by stats as new features (mean/std/count) | column? (group-by col), agg_column? |
+
+### NLP / Text Preprocessing (for text/language datasets → output_type "generate" unless noted)
+| id | what it does | params |
+|----|-------------|--------|
+| nlp.text_clean | clean text: lowercase, remove HTML/URLs/emails/punctuation/numbers, normalize whitespace | column?, strategy? (all/lowercase/no_punct/no_numbers/no_html/no_urls/no_emails) |
+| nlp.remove_stopwords | remove English stopwords from text columns | column?, extra_words? (list) |
+| nlp.tokenize | split text into tokens, create token_count column | column? |
+| nlp.tfidf | TF-IDF vectorization → N feature columns | column?, n? (max features, default 50) |
+| nlp.bow | Bag of Words count vectorization → N feature columns | column?, n? (max features, default 50) |
+| nlp.ngrams | extract word n-gram features via TF-IDF | column?, n? (gram size, default 2), max_features? |
+| nlp.regex_extract | extract patterns: email/url/hashtag/mention/phone/number/custom | column?, pattern? (email/url/hashtag/mention/phone/number/all), regex? |
+| nlp.sentiment_score | lexicon-based sentiment scoring (positive/negative/compound) + chart | column? |
+| nlp.word_frequency | top-N word frequency analysis with bar chart (output_type=query) | column?, n? (default 20), remove_stopwords? |
+| nlp.text_similarity | cosine similarity matrix using TF-IDF + heatmap (output_type=query) | column? |
+| nlp.vocab_stats | vocabulary statistics: unique tokens, TTR, avg word length, hapax (output_type=query) | column? |
+| nlp.text_normalize | normalize: strip accents + basic stemming + lowercase | column?, stem? (default true) |
+| nlp.language_detect | detect language per row from Unicode character ranges + pie chart | column? |
+| nlp.hash_vectorize | feature hashing — fast, memory-efficient text vectorization | column?, n? (features, default 32) |
+| nlp.text_encode | encode text as integer sequences (word→ID) for deep learning | column?, max_vocab? (default 5000), max_len? (default 100) |
 """
 
 PLANNER_PROMPT = """\
@@ -185,6 +204,18 @@ When the user asks for a visualization, REASON about:
    - User wants to see trends over time/sequence → line_chart
    - User wants a correlation overview → heatmap
 4. **Do NOT default to bar_chart or pie_chart blindly.** Read the user's actual intent word by word.
+
+### NLP / text data — THINK before picking handlers
+When the user works with text/NLP data or asks to prepare text for ML:
+1. **Text cleaning pipeline** (typical order): text_clean → remove_stopwords → text_normalize → then vectorize
+2. **Vectorization choices**:
+   - Simple classification → nlp.tfidf or nlp.bow (fast, interpretable)
+   - High-cardinality text → nlp.hash_vectorize (memory-efficient)
+   - Deep learning input → nlp.text_encode (integer sequences)
+   - Capture phrases → nlp.ngrams (bigrams/trigrams)
+3. **Analysis** (read-only): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity → output_type="query"
+4. **Feature extraction**: nlp.sentiment_score, nlp.regex_extract, nlp.language_detect → output_type="generate"
+5. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
