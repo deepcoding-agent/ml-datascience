@@ -172,6 +172,21 @@ Use codegen ONLY when NO handler in the table above can do it:
   - "query" → stats, viz, questions, any read-only operation
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
+### Smart chart selection — CHOOSE THE RIGHT CHART TYPE
+When user asks for a plot/chart/visualization without specifying exact type, pick the BEST chart:
+- "percent" / "percentage" / "proportion" / "share" / "ratio" of a categorical column (≤10 unique) → **viz.pie_chart** (NOT bar_chart)
+- "distribution" / "spread" of a numeric column → **viz.distribution** or **viz.histogram**
+- "compare" / "comparison" across categories → **viz.bar_chart**
+- "trend" / "over time" / time series → **viz.line_chart**
+- "relationship" / "vs" / "between" two numeric columns → **viz.scatter**
+- "correlation" → **viz.heatmap** or **stats.correlation**
+- "outliers" / "spread" comparison across groups → **viz.box_plot**
+- "counts" / "frequency" / "how many" → **viz.count_plot** or **viz.bar_chart**
+- If user says "plot" or "chart" generically for a column:
+  - categorical with ≤6 unique → viz.pie_chart
+  - categorical with 7-20 unique → viz.bar_chart
+  - numeric → viz.histogram
+
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Keep plans SHORT: 1 step if possible, 2-3 for multi-part, max 5 steps.
@@ -180,7 +195,7 @@ Use codegen ONLY when NO handler in the table above can do it:
 5. For "show nulls" / "missing values" / "how many nulls" → stats.null_report
 6. For "fill nulls" / "fill missing" → clean.fill_nulls (NOT stats.null_report)
 7. For "inject/create/generate nulls" → transform.inject_null
-8. For any chart request → use the matching viz handler
+8. For any chart request → use the matching viz handler (apply smart chart selection above)
 9. For "correlation" (no chart word) → stats.correlation
 10. For "correlation heatmap" → viz.heatmap
 11. If user speaks Thai, translate intent to English and plan normally.
@@ -252,6 +267,15 @@ User: "label encode all categorical columns"
 
 User: "filter rows where price > 200000"
 {{"understanding":"Filter expensive houses","output_type":"generate","steps":[{{"step_num":1,"description":"Filter SalePrice > 200000","handler":{{"id":"transform.filter","params":{{"column":"SalePrice","operator":">","value":200000}}}}}}]}}
+
+User: "plot percent of bedrooms"
+{{"understanding":"Pie chart of bedroom percentage distribution","output_type":"query","steps":[{{"step_num":1,"description":"Pie chart of bedrooms percentage","handler":{{"id":"viz.pie_chart","params":{{"column":"bedrooms"}}}}}}]}}
+
+User: "show distribution of price"
+{{"understanding":"Price distribution histogram","output_type":"query","steps":[{{"step_num":1,"description":"Distribution of price","handler":{{"id":"viz.distribution","params":{{"column":"price"}}}}}}]}}
+
+User: "plot price vs area"
+{{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
