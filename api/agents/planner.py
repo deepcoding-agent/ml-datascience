@@ -37,6 +37,38 @@ HANDLER_CATALOG = """\
 | stats.kurtosis | kurtosis per numeric column | (none) |
 | stats.zero_report | count zeros/empty values per column | (none) |
 | stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low) | (none) |
+| stats.mode_report | mode values per column | (none) |
+| stats.variance_report | variance per numeric column | (none) |
+| stats.range_report | range (max-min) per numeric column | (none) |
+| stats.iqr_report | interquartile range per numeric column | (none) |
+| stats.z_score_report | z-score analysis, flag extreme values | column? |
+| stats.chi2_test | chi-squared independence test between two categorical columns | columns (list of 2) |
+| stats.t_test | independent t-test: compare numeric column across two groups | column? (numeric), group_column? (categorical) |
+| stats.anova_test | one-way ANOVA: compare numeric across multiple groups | column? (numeric), group_column? (categorical) |
+| stats.mann_whitney | Mann-Whitney U non-parametric test | column? (numeric), group_column? (categorical) |
+| stats.ks_test | Kolmogorov-Smirnov normality test | column? |
+| stats.frequency_table | frequency table with cumulative percentage | column? |
+| stats.coefficient_variation | coefficient of variation (CV) per numeric column | (none) |
+| stats.correlation_rank | Spearman rank correlation matrix + heatmap | (none) |
+| stats.entropy_report | Shannon entropy per column | (none) |
+| stats.gini_report | Gini impurity per categorical column | (none) |
+| stats.missing_pattern | which columns tend to be missing together | (none) |
+| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | column? |
+| stats.group_stats | descriptive stats per group (groupby + describe) | column? (group col), value_column? |
+| stats.column_compare | compare two columns statistically | columns (list of 2) |
+| stats.mutual_info_report | mutual information scores between features | column? (target) |
+| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | (none) |
+| stats.ratio_report | compute key ratios between numeric columns | (none) |
+| stats.distribution_fit | fit best distribution (normal/lognormal/exponential) | column? |
+| stats.stability_report | check feature stability (split data, compare halves) | (none) |
+| stats.pairwise_stats | pairwise comparison between numeric columns | (none) |
+| stats.time_stats | time-series stats (autocorrelation, stationarity hint) | column? |
+| stats.top_bottom_values | top N and bottom N values of a column | column?, n? (default 5) |
+| stats.memory_report | detailed memory usage per column | (none) |
+| stats.cluster_tendency | Hopkins statistic — is data clusterable? | (none) |
+| stats.sparsity_report | sparsity analysis (zeros + nulls per column) | (none) |
+| stats.data_sample | random sample with stats summary | n? (default 10) |
+| stats.normality_comprehensive | comprehensive normality: Shapiro + D'Agostino + Anderson-Darling | column? |
 
 ### Clean (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
