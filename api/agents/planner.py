@@ -211,6 +211,36 @@ HANDLER_CATALOG = """\
 | feature.quantile_transform | map values to uniform/normal distribution | column?, distribution? (normal/uniform) |
 | feature.diff_features | create difference features (first/second order) | column?, periods? (default 1) |
 | feature.aggregation_features | group-by stats as new features (mean/std/count) | column? (group-by col), agg_column? |
+| feature.log1p_transform | log(1+x) transform for skewed non-negative data | column? |
+| feature.interaction_features | multiply pairs of numeric columns | columns? |
+| feature.bin_numeric | custom binning with optional labels | column, n? (bins, default 5), labels? |
+| feature.abs_transform | absolute value transform | column? |
+| feature.reciprocal_transform | 1/x reciprocal transform (zeros become NaN) | column? |
+| feature.count_encode | encode categoricals by absolute count | column? |
+| feature.rare_category_encode | group rare categories into 'Other' | column?, min_count? (default 5) |
+| feature.is_null_features | create binary is_null flags for columns with nulls | (none) |
+| feature.is_zero_features | create binary is_zero flags for numeric columns | (none) |
+| feature.rank_transform | percent rank (0-1) for numeric columns | column? |
+| feature.kbins_discretize | KBins discretizer (uniform/quantile/kmeans) | column?, n? (bins, default 5), strategy? (quantile/uniform/kmeans) |
+| feature.hash_encode | hash encoding for high-cardinality categoricals | column?, n? (features, default 8) |
+| feature.ordinal_encode | ordinal encoding with auto-detected alphabetical order | column? |
+| feature.label_binarize | multi-label binarization — one column per unique value | column |
+| feature.exponential_transform | exponential transform (e^x) | column? |
+| feature.sin_cos_hour | sin/cos encoding for hour-of-day (period=24) | column? |
+| feature.is_weekend | weekend flag (1/0) from datetime column | column? |
+| feature.is_holiday | basic holiday detection (weekends + common fixed dates) | column? |
+| feature.time_since | days since reference date or first date | column?, reference? |
+| feature.distance_from_mean | distance from column mean or median | column?, method? (mean/median) |
+| feature.clip_features | clip values to percentile range | column?, lower? (default 0.01), upper? (default 0.99) |
+| feature.auto_feature_select | auto-select: drop low-variance + high-correlation | var_threshold? (default 0.01), corr_threshold? (default 0.95) |
+| feature.feature_cross | cross two categorical columns (A_x_B combinations) | columns? (list of 2) |
+| feature.rolling_stats_features | rolling mean/std/min/max as feature columns | column?, window? (default 3) |
+| feature.ewm_features | exponentially weighted moving mean/std | column?, span? (default 5) |
+| feature.target_binary_encode | encode target as binary (above/below median) | column? (target) |
+| feature.zscore_features | add z-score columns for numeric features | column? |
+| feature.boxcox_transform | Box-Cox transform (positive values only) | column? |
+| feature.yeo_johnson_transform | Yeo-Johnson transform (handles negatives) | column? |
+| feature.winsorize | cap extreme values at percentile bounds | column?, lower? (default 0.05), upper? (default 0.95) |
 
 ### NLP / Text Preprocessing (for text/language datasets → output_type "generate" unless noted)
 | id | what it does | params |
