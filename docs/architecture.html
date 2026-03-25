@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PrepPilot — System Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #FAFAFA;
+    --white: #FFFFFF;
+    --text: #1A1A2E;
+    --text2: #64748B;
+    --text3: #94A3B8;
+    --border: #E2E8F0;
+    --orange: #E8742D;
+    --orange-light: #FFF7F0;
+    --orange-border: #FDDCBB;
+    --teal: #0D9488;
+    --teal-light: #F0FDFA;
+    --teal-border: #99F6E4;
+    --blue: #3B82F6;
+    --blue-light: #EFF6FF;
+    --blue-border: #BFDBFE;
+    --purple: #8B5CF6;
+    --purple-light: #F5F3FF;
+    --purple-border: #DDD6FE;
+    --dark: #0F172A;
+    --dark2: #1E293B;
+    --green: #22C55E;
+    --green-light: #F0FDF4;
+    --green-border: #BBF7D0;
+    --red: #EF4444;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 48px 24px;
+  }
+  .page {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── Header ──────────────────────────────── */
+  .header {
+    text-align: center;
+    margin-bottom: 56px;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .header h1 span { color: var(--orange); }
+  .header p {
+    font-size: 14px;
+    color: var(--text2);
+    font-weight: 400;
+  }
+  .header .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 14px;
+    border-radius: 100px;
+    background: var(--orange-light);
+    border: 1px solid var(--orange-border);
+    color: var(--orange);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 16px;
+  }
+  .badge-dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--orange);
+  }
+
+  /* ── Diagram container ───────────────────── */
+  .diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ── Tier row ────────────────────────────── */
+  .tier {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+  }
+  .tier-label {
+    width: 120px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-end;
+    padding-right: 16px;
+    border-right: 2px solid var(--border);
+  }
+  .tier-label h3 {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text3);
+  }
+  .tier-label .port {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 2px;
+  }
+  .tier-content {
+    flex: 1;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Box styles ──────────────────────────── */
+  .box {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+    position: relative;
+    transition: box-shadow 0.2s;
+  }
+  .box:hover { box-shadow: var(--shadow-md); }
+
+  .box-full { flex: 1; min-width: 280px; }
+  .box-half { flex: 1; min-width: 200px; }
+  .box-third { flex: 1; min-width: 160px; }
+
+  .box h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .box p, .box ul {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.7;
+  }
+  .box ul {
+    list-style: none;
+    padding: 0;
+  }
+  .box ul li {
+    padding: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .box ul li::before {
+    content: '';
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Color accents */
+  .accent-orange { border-left: 3px solid var(--orange); }
+  .accent-teal   { border-left: 3px solid var(--teal); }
+  .accent-blue   { border-left: 3px solid var(--blue); }
+  .accent-purple { border-left: 3px solid var(--purple); }
+  .accent-green  { border-left: 3px solid var(--green); }
+  .accent-dark   { border-left: 3px solid var(--dark); }
+
+  .accent-orange ul li::before { background: var(--orange); }
+  .accent-teal ul li::before   { background: var(--teal); }
+  .accent-blue ul li::before   { background: var(--blue); }
+  .accent-purple ul li::before { background: var(--purple); }
+  .accent-green ul li::before  { background: var(--green); }
+  .accent-dark ul li::before   { background: var(--dark); }
+
+  .tag {
+    display: inline-flex;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+  .tag-orange  { background: var(--orange-light); color: var(--orange); border: 1px solid var(--orange-border); }
+  .tag-teal    { background: var(--teal-light); color: var(--teal); border: 1px solid var(--teal-border); }
+  .tag-blue    { background: var(--blue-light); color: var(--blue); border: 1px solid var(--blue-border); }
+  .tag-purple  { background: var(--purple-light); color: var(--purple); border: 1px solid var(--purple-border); }
+  .tag-green   { background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
+  .tag-dark    { background: #F1F5F9; color: var(--dark); border: 1px solid var(--border); }
+
+  /* ── Arrow connectors ────────────────────── */
+  .arrow-down {
+    display: flex;
+    justify-content: center;
+    padding: 4px 0;
+    margin-left: 136px;
+  }
+  .arrow-down svg {
+    width: 20px;
+    height: 28px;
+  }
+  .arrow-down path {
+    stroke: var(--border);
+    stroke-width: 2;
+    fill: none;
+  }
+  .arrow-down polygon {
+    fill: var(--text3);
+  }
+
+  /* ── Handler grid ────────────────────────── */
+  .handler-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+  .handler-cell {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    box-shadow: var(--shadow);
+  }
+  .handler-cell .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .handler-cell .label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 4px;
+  }
+  .handler-cell:nth-child(1) .num { color: var(--blue); }
+  .handler-cell:nth-child(2) .num { color: var(--teal); }
+  .handler-cell:nth-child(3) .num { color: var(--purple); }
+  .handler-cell:nth-child(4) .num { color: var(--orange); }
+  .handler-cell:nth-child(5) .num { color: var(--green); }
+
+  /* ── Flow section ────────────────────────── */
+  .flow-section {
+    margin-top: 56px;
+  }
+  .flow-section h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 24px;
+    letter-spacing: -0.01em;
+  }
+  .flow-steps {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .flow-step {
+    flex: 1;
+    min-width: 140px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    padding: 16px;
+    text-align: center;
+    position: relative;
+    box-shadow: var(--shadow);
+  }
+  .flow-step:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .flow-step:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+  .flow-step + .flow-step { border-left: none; }
+  .flow-step .step-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text3);
+    margin-bottom: 6px;
+  }
+  .flow-step .step-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .flow-step .step-desc {
+    font-size: 10px;
+    color: var(--text2);
+    line-height: 1.5;
+  }
+  .flow-step::after {
+    content: '';
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0; height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-left: 8px solid var(--border);
+    z-index: 1;
+  }
+  .flow-step:last-child::after { display: none; }
+
+  /* ── Tech stack ──────────────────────────── */
+  .tech-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 32px;
+    justify-content: center;
+  }
+  .tech-chip {
+    padding: 6px 14px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--white);
+    border: 1px solid var(--border);
+    color: var(--text2);
+  }
+
+  /* ── Footer ──────────────────────────────── */
+  .footer {
+    text-align: center;
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text3);
+  }
+
+  @media (max-width: 768px) {
+    .tier { flex-direction: column; }
+    .tier-label {
+      width: 100%;
+      flex-direction: row;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 8px;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      padding: 0 0 8px 0;
+      margin-bottom: 8px;
+    }
+    .handler-grid { grid-template-columns: repeat(3, 1fr); }
+    .flow-steps { flex-direction: column; }
+    .flow-step { border-radius: var(--radius) !important; border-left: 1px solid var(--border) !important; }
+    .flow-step::after { display: none; }
+    .arrow-down { margin-left: 0; }
+  }
+
+  @media print {
+    body { background: white; padding: 24px; }
+    .box:hover { box-shadow: var(--shadow); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge"><span class="badge-dot"></span> System Architecture</div>
+    <h1>Prep<span>Pilot</span> — AI Data Preparation Platform</h1>
+    <p>Next.js 16 + FastAPI + Anthropic Claude / OpenAI GPT + Plotly + Docker</p>
+  </div>
+
+  <!-- ═══════════════ ARCHITECTURE TIERS ═══════════════ -->
+  <div class="diagram">
+
+    <!-- ── Tier 1: Client ──────────────────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>Client</h3>
+        <span class="port">Browser</span>
+      </div>
+      <div class="tier-content">
+        <div class="box box-full accent-orange">
+          <h4>
+            Web Browser
+            <span class="tag tag-orange">User Interface</span>
+          </h4>
+          <p>Chat-based data science interface. Upload CSV datasets, send natural language commands, receive interactive Plotly charts, cleaned datasets, and ML-ready data splits.</p>
+          <ul style="margin-top:8px">
+            <li>Google OAuth authentication (NextAuth v5)</li>
+            <li>Real-time dataset management (DatasetPicker)</li>
+            <li>Inline tables, fullscreen charts, folder cards</li>
+            <li>Slash commands: <code style="font-family:'JetBrains Mono';font-size:11px;background:#F1F5F9;padding:1px 5px;border-radius:4px">/cleaning</code> <code style="font-family:'JetBrains Mono';font-size:11px;background:#F1F5F9;padding:1px 5px;border-radius:4px">/ml-prepare</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-down">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 22"/><polygon points="5,20 15,20 10,28"/></svg>
+    </div>
+
+    <!-- ── Tier 2: Frontend Server ─────────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>Frontend</h3>
+        <span class="port">:3000</span>
+      </div>
+      <div class="tier-content">
+        <div class="box box-half accent-blue">
+          <h4>
+            Next.js 16
+            <span class="tag tag-blue">App Router</span>
+          </h4>
+          <ul>
+            <li>Server-side rendering + React client</li>
+            <li>NextAuth v5 + Prisma ORM</li>
+            <li>SQLite (dev) / MongoDB (prod)</li>
+            <li>TypeScript strict mode</li>
+          </ul>
+        </div>
+        <div class="box box-half accent-blue">
+          <h4>
+            API Routes
+            <span class="tag tag-dark">Thin Proxies</span>
+          </h4>
+          <ul>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /api/conversations/[id]</code></li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /api/auto-clean</code></li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /api/auto-prepare</code></li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /api/prepare</code></li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /api/eda-report</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-down">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 22"/><polygon points="5,20 15,20 10,28"/></svg>
+    </div>
+
+    <!-- ── Tier 3: Backend API ─────────────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>Backend</h3>
+        <span class="port">:8000</span>
+      </div>
+      <div class="tier-content">
+        <div class="box box-full accent-teal">
+          <h4>
+            FastAPI
+            <span class="tag tag-teal">Python 3.10+</span>
+          </h4>
+          <ul>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /chat</code> — DS-Agent orchestrator (planner → executor → interpreter)</li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /auto-clean</code> — AI-driven dataset cleaning</li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /auto-prepare</code> — AI-driven ML data preparation</li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /prepare</code> — 10-step ML pipeline with config</li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">POST /eda-report</code> — Structured EDA with auto-charts</li>
+            <li><code style="font-family:'JetBrains Mono';font-size:11px">GET  /models</code> — Available AI models with provider detection</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-down">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 22"/><polygon points="5,20 15,20 10,28"/></svg>
+    </div>
+
+    <!-- ── Tier 4: AI Agent Layer ──────────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>AI Agents</h3>
+        <span class="port">Core Logic</span>
+      </div>
+      <div class="tier-content">
+        <div class="box box-third accent-purple">
+          <h4>Planner</h4>
+          <p>LLM reads user intent + dataset context → outputs JSON plan with handler IDs or codegen tasks. <strong>Sole decision-maker</strong> — no hardcoded keywords.</p>
+        </div>
+        <div class="box box-third accent-purple">
+          <h4>Step Executor</h4>
+          <p>Resolves handler.id from registry → execute. On failure → silent codegen fallback. Auto-retry on sandbox errors.</p>
+        </div>
+        <div class="box box-third accent-purple">
+          <h4>Auto-Clean</h4>
+          <p>Deterministic analysis + AI planning. Decides which clean handlers to run based on data issues found.</p>
+        </div>
+        <div class="box box-third accent-purple">
+          <h4>Auto-Prepare</h4>
+          <p>AI analyzes target + dataset → picks optimal PrepConfig → runs 10-step pipeline → returns train/test splits.</p>
+        </div>
+        <div class="box box-third accent-purple">
+          <h4>Interpreter</h4>
+          <p>LLM explains codegen results using actual computed data. Handler results use summaries directly (no LLM call).</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-down">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 22"/><polygon points="5,20 15,20 10,28"/></svg>
+    </div>
+
+    <!-- ── Tier 5: Handler Registry ────────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>Handlers</h3>
+        <span class="port">106 Total</span>
+      </div>
+      <div class="tier-content" style="flex-direction:column;gap:12px">
+        <div class="handler-grid">
+          <div class="handler-cell">
+            <div class="num">18</div>
+            <div class="label">Stats</div>
+          </div>
+          <div class="handler-cell">
+            <div class="num">20</div>
+            <div class="label">Clean</div>
+          </div>
+          <div class="handler-cell">
+            <div class="num">26</div>
+            <div class="label">Transform</div>
+          </div>
+          <div class="handler-cell">
+            <div class="num">22</div>
+            <div class="label">Viz</div>
+          </div>
+          <div class="handler-cell">
+            <div class="num">20</div>
+            <div class="label">Feature</div>
+          </div>
+        </div>
+        <div class="box accent-green" style="width:100%">
+          <h4>
+            Sandboxed Execution
+            <span class="tag tag-green">exec()</span>
+          </h4>
+          <p>LLM-generated Python runs in restricted namespace with pandas, numpy, Plotly, scikit-learn. Stdout captured, charts serialized as JSON, DataFrames detected automatically.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-down">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 22"/><polygon points="5,20 15,20 10,28"/></svg>
+    </div>
+
+    <!-- ── Tier 6: External Services ───────────── -->
+    <div class="tier">
+      <div class="tier-label">
+        <h3>External</h3>
+        <span class="port">APIs</span>
+      </div>
+      <div class="tier-content">
+        <div class="box box-third accent-dark">
+          <h4>
+            OpenAI
+            <span class="tag tag-dark">Default</span>
+          </h4>
+          <ul>
+            <li>GPT-4o Mini (default)</li>
+            <li>GPT-4o</li>
+          </ul>
+        </div>
+        <div class="box box-third accent-dark">
+          <h4>
+            Anthropic
+            <span class="tag tag-dark">Optional</span>
+          </h4>
+          <ul>
+            <li>Claude Sonnet 4.6</li>
+            <li>Claude Opus 4.6</li>
+            <li>Claude Haiku 4.5</li>
+          </ul>
+        </div>
+        <div class="box box-third accent-dark">
+          <h4>
+            Database
+            <span class="tag tag-dark">Prisma</span>
+          </h4>
+          <ul>
+            <li>SQLite (development)</li>
+            <li>MongoDB Atlas (production)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════ CHAT REQUEST FLOW ═══════════════ -->
+  <div class="flow-section">
+    <h2>Chat Request Flow — <code style="font-family:'JetBrains Mono';font-size:14px;background:#F1F5F9;padding:2px 8px;border-radius:6px">POST /chat</code></h2>
+    <div class="flow-steps">
+      <div class="flow-step">
+        <div class="step-num">01</div>
+        <div class="step-title">Translate</div>
+        <div class="step-desc">Thai keywords → English mapping</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">02</div>
+        <div class="step-title">Context</div>
+        <div class="step-desc">Analyze dataset: nulls, dtypes, skew, cardinality</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">03</div>
+        <div class="step-title">AI Planner</div>
+        <div class="step-desc">LLM sees 106 handlers → outputs JSON plan</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">04</div>
+        <div class="step-title">Execute</div>
+        <div class="step-desc">Handler or codegen per step, fallback on error</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">05</div>
+        <div class="step-title">Interpret</div>
+        <div class="step-desc">Handler summaries (fast) or LLM explanation</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">06</div>
+        <div class="step-title">Respond</div>
+        <div class="step-desc">Text + charts + datasets → frontend</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ ML PIPELINE FLOW ═══════════════ -->
+  <div class="flow-section">
+    <h2>ML Preparation Pipeline — <code style="font-family:'JetBrains Mono';font-size:14px;background:#F1F5F9;padding:2px 8px;border-radius:6px">/ml-prepare</code></h2>
+    <div class="flow-steps">
+      <div class="flow-step">
+        <div class="step-num">01</div>
+        <div class="step-title">Infer Types</div>
+        <div class="step-desc">String → numeric / datetime</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">02</div>
+        <div class="step-title">Drop Cols</div>
+        <div class="step-desc">Constants, IDs, high-null</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">03</div>
+        <div class="step-title">Fill Missing</div>
+        <div class="step-desc">Auto: skew→median, cat→mode</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">04</div>
+        <div class="step-title">Deduplicate</div>
+        <div class="step-desc">Remove duplicate rows</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">05</div>
+        <div class="step-title">Outliers</div>
+        <div class="step-desc">IQR / z-score clipping</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">06</div>
+        <div class="step-title">Encode</div>
+        <div class="step-desc">One-hot / label / ordinal</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">07</div>
+        <div class="step-title">Scale</div>
+        <div class="step-desc">Standard / MinMax / Robust</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">08</div>
+        <div class="step-title">Corr Filter</div>
+        <div class="step-desc">Drop |r| > threshold</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">09</div>
+        <div class="step-title">Split</div>
+        <div class="step-desc">Train / test (stratified)</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-num">10</div>
+        <div class="step-title">Output</div>
+        <div class="step-desc">X/y train+test + report</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ TECH STACK ═══════════════ -->
+  <div class="flow-section">
+    <h2>Technology Stack</h2>
+    <div class="tech-row">
+      <span class="tech-chip">Next.js 16</span>
+      <span class="tech-chip">TypeScript</span>
+      <span class="tech-chip">Tailwind CSS</span>
+      <span class="tech-chip">React 19</span>
+      <span class="tech-chip">Prisma ORM</span>
+      <span class="tech-chip">NextAuth v5</span>
+      <span class="tech-chip">FastAPI</span>
+      <span class="tech-chip">Python 3.10+</span>
+      <span class="tech-chip">Pandas</span>
+      <span class="tech-chip">scikit-learn</span>
+      <span class="tech-chip">Plotly.js</span>
+      <span class="tech-chip">LangChain</span>
+      <span class="tech-chip">OpenAI GPT</span>
+      <span class="tech-chip">Anthropic Claude</span>
+      <span class="tech-chip">Docker</span>
+      <span class="tech-chip">SQLite / MongoDB</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    PrepPilot &mdash; Senior Project, Computer Engineering, KMUTT 2025
+  </div>
+
+</div>
+</body>
+</html>
