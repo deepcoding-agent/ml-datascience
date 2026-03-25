@@ -118,7 +118,9 @@ class StatsHandler(BaseHandler):
         n = params.get("n", 10)
         vc = df[col].value_counts().head(n).reset_index()
         vc.columns = [col, "count"]
-        return HandlerResult(success=True, result_df=vc, summary=f"Top {n} values in '{col}'")
+        total = int(df[col].count())
+        vc["percentage"] = (vc["count"] / max(total, 1) * 100).round(2)
+        return HandlerResult(success=True, result_df=vc, summary=f"Top {n} values in '{col}' (total={total:,})")
 
     @staticmethod
     def handle_unique_values(df: pd.DataFrame, params: dict) -> HandlerResult:
