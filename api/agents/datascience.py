@@ -25,7 +25,6 @@ from api.agents.planner import plan_steps
 from api.agents.result_interpreter import interpret_final_result
 from api.agents.step_executor import execute_plan
 from api.context import data_context, sanitize_var_name
-from api.handlers.base import translate_thai_keywords
 from api.llm import build_lc_history, get_llm
 from api.logger import get_logger
 from api.models import ChatMessage, DatasetPayload
@@ -109,32 +108,43 @@ def run_datascience_agent(
     for ds in datasets[1:]:
         extra_dfs[sanitize_var_name(ds.name)] = pd.DataFrame(ds.data)
 
-    # Step 2: Translate Thai keywords
-    translated_msg = translate_thai_keywords(message)
-    if translated_msg != message:
-        log.info("  translated: '%s' → '%s'", message[:60], translated_msg[:60])
-
-    # Step 3: Analyze context
+    # Step 2: Analyze context
     ctx = analyze_context(df)
-    log.info(
-        "  context: %s, nulls=%d cols, dupes=%d",
-        ctx.shape, len(ctx.null_cols), ctx.duplicate_count,
-    )
+    log.info("  context: %s, nulls=%d cols, dupes=%d", ctx.shape, len(ctx.null_cols), ctx.duplicate_count)
 
-    # Step 4: Greeting shortcut (trivial — no AI needed)
+    # Step 3: Greeting shortcut (trivial — no AI needed)
     if _is_pure_greeting(message):
         elapsed = time.perf_counter() - t0
         log.info("━━ DS-Agent done (greeting) elapsed=%.1fs ━━", elapsed)
         return _handle_greeting(df, ctx, primary.name)
 
-    # Step 5: AI planner — the sole decision-maker
+    # Step 4: AI planner — the sole decision-maker
     df_ctx = data_context(df, primary.name)
     planner_llm = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id)
     plan = plan_steps(
-        user_message=translated_msg,
+        user_message=message,
         df_context=df_ctx,
         llm=planner_llm,
     )
+
+    # Step 4b: Direct answer — planner decided this is NOT about the dataset
+    if plan.get("direct_answer"):
+        log.info("  planner → direct_answer (not about dataset)")
+        from langchain_core.messages import SystemMessage
+        answer_llm = get_llm(temperature=0.3, max_tokens=1024, model_id=model_id)
+        msgs = (
+            [SystemMessage(content=(
+                "You are a helpful AI assistant called PrepPilot. "
+                "A dataset is loaded but the user's question is NOT about the dataset. "
+                "Answer the question directly and naturally. Be concise."
+            ))]
+            + build_lc_history(history[-6:])
+            + [HumanMessage(content=message)]
+        )
+        direct_reply = answer_llm.invoke(msgs).content
+        elapsed = time.perf_counter() - t0
+        log.info("━━ DS-Agent done (direct_answer) elapsed=%.1fs ━━", elapsed)
+        return direct_reply, {"output_type": "text", "should_activate": False}
 
     # Step 6: Execute each step (follows planner's handler/codegen decisions)
     executor_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)

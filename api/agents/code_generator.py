@@ -93,6 +93,48 @@ result = pd.DataFrame({{...}})
 print(result.to_string(index=False))
 ```
 
+### If comparing rows (max vs min, top vs bottom):
+```python
+col = 'TargetColumn'
+max_row = df.loc[df[col].idxmax()]
+min_row = df.loc[df[col].idxmin()]
+print(f"Highest {{col}}: {{max_row[col]:,.2f}}")
+print(f"Lowest {{col}}: {{min_row[col]:,.2f}}")
+for c in df.columns:
+    print(f"  {{c}}: {{max_row[c]}} vs {{min_row[c]}}")
+# Side-by-side table
+result = pd.DataFrame({{'Column': df.columns, 'Highest': [max_row[c] for c in df.columns], 'Lowest': [min_row[c] for c in df.columns]}})
+```
+
+### If filtering and summarizing groups:
+```python
+# Group, aggregate, then format
+grouped = df.groupby('group_col')['value_col'].agg(['count','mean','median','min','max']).round(2)
+grouped = grouped.sort_values('mean', ascending=False).reset_index()
+result = grouped
+print(result.to_string(index=False))
+fig = px.bar(result, x='group_col', y='mean', text='count', title='Group Comparison')
+```
+
+### If doing multi-step analysis (compare, correlate, segment):
+```python
+# Step 1: compute what's needed
+# Step 2: create summary table as result DataFrame
+# Step 3: print key findings with actual numbers
+# Step 4: create Plotly chart if visual helps
+print(f"Key finding 1: ...")
+print(f"Key finding 2: ...")
+result = pd.DataFrame(summary_data)
+fig = px.bar(result, ...)
+```
+
+## STYLE GUIDE FOR CODE OUTPUT
+- Print key findings with exact numbers — the interpreter uses these to build the response
+- Use format specifiers: {{value:,.2f}} for numbers, {{value:.1f}}% for percentages
+- Create a `result` DataFrame when the user would benefit from seeing a table
+- Create a `fig` Plotly chart when visualization would help understanding
+- Do NOT print raw DataFrames with df.to_string() — print human-readable summaries instead
+
 ## OUTPUT
 Return ONLY executable Python code. No markdown fences. No explanation.
 """

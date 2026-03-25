@@ -138,6 +138,69 @@ HANDLER_CATALOG = """\
 | feature.quantile_transform | map values to uniform/normal distribution | column?, distribution? (normal/uniform) |
 | feature.diff_features | create difference features (first/second order) | column?, periods? (default 1) |
 | feature.aggregation_features | group-by stats as new features (mean/std/count) | column? (group-by col), agg_column? |
+
+### NLP / Text Preprocessing (for text/language datasets → output_type "generate" unless noted)
+| id | what it does | params |
+|----|-------------|--------|
+| nlp.text_clean | clean text: lowercase, remove HTML/URLs/emails/punctuation/numbers, normalize whitespace | column?, strategy? (all/lowercase/no_punct/no_numbers/no_html/no_urls/no_emails) |
+| nlp.remove_stopwords | remove English stopwords from text columns | column?, extra_words? (list) |
+| nlp.tokenize | split text into tokens, create token_count column | column? |
+| nlp.tfidf | TF-IDF vectorization → N feature columns | column?, n? (max features, default 50) |
+| nlp.bow | Bag of Words count vectorization → N feature columns | column?, n? (max features, default 50) |
+| nlp.ngrams | extract word n-gram features via TF-IDF | column?, n? (gram size, default 2), max_features? |
+| nlp.regex_extract | extract patterns: email/url/hashtag/mention/phone/number/custom | column?, pattern? (email/url/hashtag/mention/phone/number/all), regex? |
+| nlp.sentiment_score | lexicon-based sentiment scoring (positive/negative/compound) + chart | column? |
+| nlp.word_frequency | top-N word frequency analysis with bar chart (output_type=query) | column?, n? (default 20), remove_stopwords? |
+| nlp.text_similarity | cosine similarity matrix using TF-IDF + heatmap (output_type=query) | column? |
+| nlp.vocab_stats | vocabulary statistics: unique tokens, TTR, avg word length, hapax (output_type=query) | column? |
+| nlp.text_normalize | normalize: strip accents + basic stemming + lowercase | column?, stem? (default true) |
+| nlp.language_detect | detect language per row from Unicode character ranges + pie chart | column? |
+| nlp.hash_vectorize | feature hashing — fast, memory-efficient text vectorization | column?, n? (features, default 32) |
+| nlp.text_encode | encode text as integer sequences (word→ID) for deep learning | column?, max_vocab? (default 5000), max_len? (default 100) |
+| nlp.keyword_extract | extract top-N keywords per document using TF-IDF scores | column?, n? (keywords per doc, default 5) |
+| nlp.char_features | character-level features: punct/digit/upper/lower/space ratios, avg word length | column? |
+| nlp.sentence_features | sentence-level stats: count, avg/min/max length, question/exclamation counts | column? |
+| nlp.readability_score | readability metrics: Flesch Reading Ease, Coleman-Liau, ARI | column? |
+| nlp.text_dedup | find/remove near-duplicate texts using TF-IDF cosine similarity | column?, threshold? (default 0.9), action? (flag/remove) |
+| nlp.emoji_features | extract emoji + emoticon count, ratio, and list per row | column? |
+| nlp.text_mask_pii | mask PII: emails, phones, credit cards, SSN, IPs, URLs → [EMAIL] etc. | column? |
+| nlp.text_augment | text augmentation: random word delete/swap to expand dataset | column?, n? (copies, default 1), strategy? (delete/swap/mixed) |
+| nlp.collocations | find significant word pair collocations ranked by PMI + chart (output_type=query) | column?, n? (default 20) |
+| nlp.word_cloud | word frequency treemap visualization (output_type=query) | column?, n? (words, default 40) |
+| nlp.text_filter | filter rows by text criteria: min/max length, contains, min words | column?, min_len?, max_len?, min_words?, contains?, not_contains? |
+| nlp.class_balance_text | analyze text label class balance + distribution chart (output_type=query) | column (label col), text_column? |
+| nlp.text_chunk | split long texts into fixed-size word chunks (new rows per chunk) | column?, chunk_size? (default 200), overlap? (default 20) |
+| nlp.spelling_features | OOV/spelling quality features: rare-word count and ratio per row | column? |
+| nlp.text_concat | combine multiple text columns into one corpus column | columns? (list), separator? (default " "), new_name? (default "text_combined") |
+| nlp.text_replace | find and replace text patterns (regex or literal) | column?, pattern, replacement, mapping? (dict), regex? (default true) |
+| nlp.text_split_sentences | split text into individual sentences (new rows per sentence) | column? |
+| nlp.text_oversample | oversample minority text classes to balance dataset | column? (label col) |
+| nlp.doc_term_matrix | build document-term frequency matrix (full vocab) | column?, n? (max features, default 100) |
+| nlp.text_window | extract sliding window contexts around a keyword | column?, keyword, window? (default 5) |
+| nlp.text_label_rules | create labels from keyword rules: {label: [keywords]} | column?, mapping (dict), default? |
+| nlp.word_overlap | Jaccard word overlap between two columns or consecutive rows | columns? (list of 2), column? |
+| nlp.text_truncate_pad | truncate or pad text to fixed word count | column?, max_words? (default 128), pad_token? |
+| nlp.text_length_dist | analyze text length distribution with histogram (output_type=query) | column? |
+| nlp.text_unique_words | extract words unique to each document (corpus-level rarity) | column? |
+| nlp.text_dedup_exact | fast exact-match text deduplication (case-insensitive) | column?, keep? (first/last) |
+| nlp.text_to_paragraphs | split text by blank lines into paragraphs (new rows) | column? |
+| nlp.text_count_pattern | count occurrences of a pattern per row, optionally filter | column?, pattern, filter? (bool) |
+| nlp.text_summary_report | comprehensive text dataset report: stats, quality, recommendations (output_type=query) | column? |
+| nlp.text_stratified_sample | stratified random sample maintaining label distribution | column? (label col), n? (default 100) |
+
+### Analysis (smart, high-level — use for complex questions, comparisons, insights)
+| id | what it does | params |
+|----|-------------|--------|
+| analysis.compare_extremes | compare rows with highest vs lowest value — side-by-side table + chart | column? (numeric col to compare by) |
+| analysis.deep_profile | deep statistical profile of a column: distribution, outliers, quartiles, chart | column? |
+| analysis.group_insights | compare stats across groups of a categorical column + box plot | column? (group col), value_column? (numeric) |
+| analysis.anomaly_detect | detect anomalies using IQR/Z-score — flag outlier rows + scatter chart | column?, method? (iqr/zscore) |
+| analysis.data_quality | comprehensive data quality scores per column + overall score + chart | (none) |
+| analysis.correlation_insights | find top correlations with explanation + scatter plots | n? (default 10) |
+| analysis.compare_columns | side-by-side comparison of two columns: stats + overlapping histogram | columns (list of 2) |
+| analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
+| analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
+| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
 """
 
 PLANNER_PROMPT = """\
@@ -154,6 +217,28 @@ output a JSON execution plan.
 {handler_catalog}
 
 ## DECISION RULES — READ CAREFULLY
+
+### FIRST: Is this about the dataset?
+Before anything else, ask yourself: **Does this message require the dataset to answer?**
+- If the user asks a general knowledge question, casual chat, opinion, math, coding help,
+  or anything NOT requiring the loaded data → set `"direct_answer": true` with empty steps.
+- If the user references columns, data, statistics, charts, cleaning, or anything that
+  needs the actual dataset → proceed to handler/codegen below.
+
+Examples of direct_answer (NOT about the dataset):
+- "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" → general question, answer directly
+- "what is machine learning?" → general knowledge
+- "how do I write a for loop in Python?" → coding help
+- "thank you" / "ok" / "got it" → casual chat
+- "1+1=?" → simple math
+- "what's the weather today?" → off-topic
+
+Examples of dataset-related (use handler/codegen):
+- "show nulls" → stats.null_report (references data quality)
+- "plot price distribution" → viz (references column)
+- "clean the data" → clean handlers (modifies dataset)
+- "how many rows?" → stats.shape (about the dataset)
+- "คอลัมน์ไหนมี null มากที่สุด" → stats.null_report (about columns)
 
 ### When to use a handler
 ALWAYS prefer a handler when one fits. Handlers are instant, reliable, and tested.
@@ -186,6 +271,32 @@ When the user asks for a visualization, REASON about:
    - User wants a correlation overview → heatmap
 4. **Do NOT default to bar_chart or pie_chart blindly.** Read the user's actual intent word by word.
 
+### NLP / text data — THINK before picking handlers
+When the user works with text/NLP data or asks to prepare text for ML:
+1. **Text cleaning pipeline** (typical order): text_clean → remove_stopwords → text_normalize → then vectorize
+2. **Vectorization choices**:
+   - Simple classification → nlp.tfidf or nlp.bow (fast, interpretable)
+   - High-cardinality text → nlp.hash_vectorize (memory-efficient)
+   - Deep learning input → nlp.text_encode (integer sequences)
+   - Capture phrases → nlp.ngrams (bigrams/trigrams)
+3. **Analysis** (read-only, query): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity, nlp.collocations, nlp.word_cloud, nlp.class_balance_text
+4. **Feature extraction** (generate): nlp.sentiment_score, nlp.regex_extract, nlp.language_detect, nlp.char_features, nlp.sentence_features, nlp.readability_score, nlp.emoji_features, nlp.keyword_extract, nlp.spelling_features
+5. **Data prep**: nlp.text_dedup (remove duplicates), nlp.text_filter (remove short/empty), nlp.text_mask_pii (anonymize), nlp.text_chunk (split long docs), nlp.text_augment (expand small datasets), nlp.text_concat (merge text columns)
+6. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
+
+### Smart analysis — use analysis handlers for complex questions
+When the user asks complex analytical questions, prefer analysis handlers over codegen:
+- "compare max vs min" / "เปรียบเทียบสูงสุดกับต่ำสุด" → analysis.compare_extremes
+- "tell me about column X in detail" / "อธิบาย column X" → analysis.deep_profile
+- "compare groups" / "เปรียบเทียบกลุ่ม" → analysis.group_insights
+- "find outliers" / "หาค่าผิดปกติ" → analysis.anomaly_detect
+- "check data quality" / "ตรวจคุณภาพ" → analysis.data_quality
+- "what correlates with X?" / "อะไรสัมพันธ์กับ X" → analysis.correlation_insights
+- "compare column A vs B" → analysis.compare_columns
+- "is there a trend?" / "มี trend ไหม" → analysis.trend_detect
+- "segment the data" / "แบ่งกลุ่มข้อมูล" → analysis.segment_analysis
+- "analyze this data" / "วิเคราะห์ข้อมูล" / "EDA" → analysis.auto_eda
+
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Keep plans SHORT: 1 step if possible, 2-3 for multi-part, max 5 steps.
@@ -197,9 +308,18 @@ When the user asks for a visualization, REASON about:
 8. For any chart request → use the matching viz handler (apply smart chart selection above)
 9. For "correlation" (no chart word) → stats.correlation
 10. For "correlation heatmap" → viz.heatmap
-11. If user speaks Thai, translate intent to English and plan normally.
+11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
+12. If the message is NOT about the dataset at all → use direct_answer (see format below).
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
+
+For direct_answer (NOT about the dataset):
+{{
+  "understanding": "one sentence",
+  "output_type": "text",
+  "direct_answer": true,
+  "steps": []
+}}
 
 For handler steps:
 {{"step_num":1,"description":"...","handler":{{"id":"category.sub","params":{{}}}}}}
@@ -207,7 +327,7 @@ For handler steps:
 For codegen steps:
 {{"step_num":2,"description":"...","codegen":{{"task":"detailed Python task description","produces":"dataframe|chart|text"}}}}
 
-Full format:
+Full format (data-related):
 {{
   "understanding": "one sentence",
   "output_type": "query | generate",
@@ -278,6 +398,21 @@ User: "show distribution of price" (distribution intent → histogram)
 
 User: "plot price vs area" (relationship intent → scatter)
 {{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
+
+User: "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" (general question, NOT about dataset)
+{{"understanding":"General question about word frequency — not related to the dataset","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "what is machine learning?" (general knowledge)
+{{"understanding":"General knowledge question","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "thank you" (casual chat)
+{{"understanding":"Casual response","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "1+1 เท่ากับเท่าไหร่" (simple math, not about data)
+{{"understanding":"Simple math question","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "how do I write a for loop?" (coding help)
+{{"understanding":"Programming question","output_type":"text","direct_answer":true,"steps":[]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """

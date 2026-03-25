@@ -28,6 +28,8 @@ FastAPI service powering the PrepPilot AI data science platform. Features an **A
 Web App (Next.js :3000)
         │
         │  POST /chat           →  DS-Agent (AI planner) or Coding Agent
+        │  POST /auto-clean    →  AI Auto-Clean (analyze + plan + execute)
+        │  POST /auto-prepare  →  AI Auto-Prepare (AI picks config + 10-step pipeline)
         │  POST /prepare        →  Data Preparation Pipeline (with PrepConfig)
         │  POST /eda-report     →  Structured EDA with auto-charts
         │  POST /suggest-target →  LLM target column suggester
@@ -50,6 +52,8 @@ DS-Agent API (FastAPI :8000)
         │   ├── code_generator.py    LLM-powered Python code generation for custom steps
         │   ├── result_interpreter.py LLM result interpreter (codegen results only)
         │   ├── context_analyzer.py  DataContext builder (nulls, skew, cardinality, warnings)
+        │   ├── auto_cleaner.py     AI Auto-Clean: analyze → plan → execute handlers → report
+        │   ├── auto_prepare.py     AI Auto-Prepare: analyze → AI picks PrepConfig → pipeline
         │   └── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
         │
         ├── api/handlers/
@@ -58,11 +62,13 @@ DS-Agent API (FastAPI :8000)
         │   ├── stats_handler.py     18 stats functions (describe, correlation, normality_test, etc.)
         │   ├── clean_handler.py     20 cleaning functions (fill nulls, clip outliers, map values, etc.)
         │   ├── transform_handler.py 26 transform functions (filter, pivot, melt, rolling, etc.)
-        │   ├── viz_handler.py       22 Plotly chart types (bar, scatter, qq_plot, density, etc.)
-        │   └── feature_handler.py   20 feature engineering functions (PCA, mutual_info, etc.)
+        │   ├── viz_handler.py       22 Plotly chart types with smart chart selection + labels
+        │   └── feature_handler.py   20 feature engineering functions (PCA, lag, text, quantile, etc.)
         │
         ├── api/routes/
         │   ├── chat.py              POST /chat — routes to DS-Agent or Coding Agent
+        │   ├── auto_clean.py        POST /auto-clean — AI-driven dataset cleaning
+        │   ├── auto_prepare.py      POST /auto-prepare — AI-driven ML data preparation
         │   ├── prepare.py           POST /prepare — 10-step prep pipeline with PrepConfig
         │   ├── eda_report.py        POST /eda-report — structured EDA + auto-charts
         │   ├── suggest_target.py    POST /suggest-target
@@ -165,13 +171,18 @@ ml-datascience/
 │   │   └── coding.py                 ← Coding Q&A agent
 │   │
 │   ├── handlers/
-│   │   ├── __init__.py               ← HANDLER_REGISTRY (55 entries)
+│   │   ├── __init__.py               ← HANDLER_REGISTRY (106 entries)
 │   │   ├── base.py                   ← HandlerResult, BaseHandler, Thai keywords
 │   │   ├── stats_handler.py          ← 18 stats functions
 │   │   ├── clean_handler.py          ← 20 cleaning functions
 │   │   ├── transform_handler.py      ← 26 transform functions
 │   │   ├── viz_handler.py            ← 22 Plotly chart types
 │   │   └── feature_handler.py        ← 20 feature engineering functions
+│   │
+│   ├── agents/
+│   │   ├── ...                       (existing agents)
+│   │   ├── auto_cleaner.py          ← AI Auto-Clean agent
+│   │   └── auto_prepare.py          ← AI Auto-Prepare agent
 │   │
 │   └── routes/
 │       ├── chat.py                   ← POST /chat
@@ -213,9 +224,10 @@ cp api/.env.example api/.env
 Edit `api/.env`:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...        # required
-ANTHROPIC_MODEL=claude-sonnet-4-6   # optional — default is claude-sonnet-4-6
-OPENAI_API_KEY=sk-proj-...          # optional — enables GPT models in model switcher
+OPENAI_API_KEY=sk-proj-...          # required — default AI provider
+OPENAI_MODEL=gpt-4o-mini            # optional — default model
+ANTHROPIC_API_KEY=sk-ant-...        # optional — enables Claude models in model switcher
+ANTHROPIC_MODEL=claude-sonnet-4-6   # optional — default Claude model
 LOG_LEVEL=info                      # optional — debug | info | warning | error
 ```
 
@@ -428,8 +440,8 @@ For the complete reference with all parameters, see **[docs/handler-feature.md](
 
 All charts use a unified minimal Plotly theme — `plotly_white`, `#FB8C3C` accent, Inter font, transparent background.
 
-### Feature Engineering (15 handlers)
-`feature_importance`, `mutual_info`, `select_k_best`, `pca`, `correlation_filter`, `variance_filter`, `log_transform`, `sqrt_transform`, `power_transform`, `target_encode`, `frequency_encode`, `cyclical_encode`, `datetime_features`, `ratio_features`, `polynomial_features`
+### Feature Engineering (20 handlers)
+`feature_importance`, `mutual_info`, `select_k_best`, `pca`, `correlation_filter`, `variance_filter`, `log_transform`, `sqrt_transform`, `power_transform`, `quantile_transform`, `target_encode`, `frequency_encode`, `cyclical_encode`, `datetime_features`, `ratio_features`, `polynomial_features`, `lag_features`, `diff_features`, `text_features`, `aggregation_features`
 
 ---
 
@@ -520,9 +532,10 @@ All configuration via `api/.env`:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | **Yes** | — | Anthropic API key |
-| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-6` | Default model for all LLM calls |
-| `OPENAI_API_KEY` | No | — | OpenAI API key (enables GPT models) |
+| `ANTHROPIC_API_KEY` | No | — | Anthropic API key (enables Claude models) |
+| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-6` | Default Claude model |
+| `OPENAI_API_KEY` | **Yes** | — | OpenAI API key (default provider) |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | Default model for all LLM calls |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warning` / `error` |
 | `PORT` | No | `8000` | Port for `start.sh` |
 | `RELOAD` | No | `true` | Hot-reload in `start.sh` |

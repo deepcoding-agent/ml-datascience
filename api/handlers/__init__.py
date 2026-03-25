@@ -11,6 +11,8 @@ from api.handlers.clean_handler import CleanHandler
 from api.handlers.transform_handler import TransformHandler
 from api.handlers.viz_handler import VizHandler
 from api.handlers.feature_handler import FeatureHandler
+from api.handlers.nlp_handler import NlpHandler
+from api.handlers.analysis_handler import AnalysisHandler
 
 HandlerFunc = Callable[[pd.DataFrame, dict], HandlerResult]
 
@@ -126,6 +128,63 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "quantile_transform"):  FeatureHandler.handle_quantile_transform,
     ("feature", "diff_features"):       FeatureHandler.handle_diff_features,
     ("feature", "aggregation_features"):FeatureHandler.handle_aggregation_features,
+    # NLP / Text preprocessing
+    ("nlp", "text_clean"):           NlpHandler.handle_text_clean,
+    ("nlp", "remove_stopwords"):     NlpHandler.handle_remove_stopwords,
+    ("nlp", "tokenize"):             NlpHandler.handle_tokenize,
+    ("nlp", "tfidf"):                NlpHandler.handle_tfidf,
+    ("nlp", "bow"):                  NlpHandler.handle_bow,
+    ("nlp", "ngrams"):               NlpHandler.handle_ngrams,
+    ("nlp", "regex_extract"):        NlpHandler.handle_regex_extract,
+    ("nlp", "sentiment_score"):      NlpHandler.handle_sentiment_score,
+    ("nlp", "word_frequency"):       NlpHandler.handle_word_frequency,
+    ("nlp", "text_similarity"):      NlpHandler.handle_text_similarity,
+    ("nlp", "vocab_stats"):          NlpHandler.handle_vocab_stats,
+    ("nlp", "text_normalize"):       NlpHandler.handle_text_normalize,
+    ("nlp", "language_detect"):      NlpHandler.handle_language_detect,
+    ("nlp", "hash_vectorize"):       NlpHandler.handle_hash_vectorize,
+    ("nlp", "text_encode"):          NlpHandler.handle_text_encode,
+    ("nlp", "keyword_extract"):      NlpHandler.handle_keyword_extract,
+    ("nlp", "char_features"):        NlpHandler.handle_char_features,
+    ("nlp", "sentence_features"):    NlpHandler.handle_sentence_features,
+    ("nlp", "readability_score"):    NlpHandler.handle_readability_score,
+    ("nlp", "text_dedup"):           NlpHandler.handle_text_dedup,
+    ("nlp", "emoji_features"):       NlpHandler.handle_emoji_features,
+    ("nlp", "text_mask_pii"):        NlpHandler.handle_text_mask_pii,
+    ("nlp", "text_augment"):         NlpHandler.handle_text_augment,
+    ("nlp", "collocations"):         NlpHandler.handle_collocations,
+    ("nlp", "word_cloud"):           NlpHandler.handle_word_cloud,
+    ("nlp", "text_filter"):          NlpHandler.handle_text_filter,
+    ("nlp", "class_balance_text"):   NlpHandler.handle_class_balance_text,
+    ("nlp", "text_chunk"):           NlpHandler.handle_text_chunk,
+    ("nlp", "spelling_features"):    NlpHandler.handle_spelling_features,
+    ("nlp", "text_concat"):          NlpHandler.handle_text_concat,
+    ("nlp", "text_replace"):         NlpHandler.handle_text_replace,
+    ("nlp", "text_split_sentences"): NlpHandler.handle_text_split_sentences,
+    ("nlp", "text_oversample"):      NlpHandler.handle_text_oversample,
+    ("nlp", "doc_term_matrix"):      NlpHandler.handle_doc_term_matrix,
+    ("nlp", "text_window"):          NlpHandler.handle_text_window,
+    ("nlp", "text_label_rules"):     NlpHandler.handle_text_label_rules,
+    ("nlp", "word_overlap"):         NlpHandler.handle_word_overlap,
+    ("nlp", "text_truncate_pad"):    NlpHandler.handle_text_truncate_pad,
+    ("nlp", "text_length_dist"):     NlpHandler.handle_text_length_dist,
+    ("nlp", "text_unique_words"):    NlpHandler.handle_text_unique_words,
+    ("nlp", "text_dedup_exact"):     NlpHandler.handle_text_dedup_exact,
+    ("nlp", "text_to_paragraphs"):   NlpHandler.handle_text_to_paragraphs,
+    ("nlp", "text_count_pattern"):   NlpHandler.handle_text_count_pattern,
+    ("nlp", "text_summary_report"):  NlpHandler.handle_text_summary_report,
+    ("nlp", "text_stratified_sample"): NlpHandler.handle_text_stratified_sample,
+    # Analysis (smart, high-level)
+    ("analysis", "compare_extremes"):     AnalysisHandler.handle_compare_extremes,
+    ("analysis", "deep_profile"):         AnalysisHandler.handle_deep_profile,
+    ("analysis", "group_insights"):       AnalysisHandler.handle_group_insights,
+    ("analysis", "anomaly_detect"):       AnalysisHandler.handle_anomaly_detect,
+    ("analysis", "data_quality"):         AnalysisHandler.handle_data_quality,
+    ("analysis", "correlation_insights"): AnalysisHandler.handle_correlation_insights,
+    ("analysis", "compare_columns"):      AnalysisHandler.handle_compare_columns,
+    ("analysis", "trend_detect"):         AnalysisHandler.handle_trend_detect,
+    ("analysis", "segment_analysis"):     AnalysisHandler.handle_segment_analysis,
+    ("analysis", "auto_eda"):             AnalysisHandler.handle_auto_eda,
 }
 
 
