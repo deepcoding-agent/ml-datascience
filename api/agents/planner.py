@@ -91,6 +91,21 @@ HANDLER_CATALOG = """\
 | transform.split_column | split column by delimiter | column, delimiter? |
 | transform.concat_columns | concatenate columns into one | columns, separator?, new_name? |
 | transform.qcut | quantile-based binning (equal frequency) | column, n? (default 4) |
+| transform.merge | merge/group by key column, aggregate numeric cols | column (key), how? (inner/left/right/outer) |
+| transform.transpose | transpose DataFrame (swap rows and columns) | (none) |
+| transform.drop_rows | drop rows by index range or specific indices | start?, end?, indices? (list) |
+| transform.shuffle | randomly shuffle all rows | seed? (default 42) |
+| transform.train_test_split | split into train/test sets, adds _split column | test_size? (default 0.2), seed?, column? (stratify) |
+| transform.clip | clip numeric values to min/max bounds | column?, min?, max? |
+| transform.where | replace values where condition is NOT met | column, operator, value, replacement? |
+| transform.explode | explode comma-separated/list column into separate rows | column, delimiter? |
+| transform.encode_binary | encode column as 0/1 based on threshold or specific value | column, threshold?, value? |
+| transform.pct_change | compute percentage change between consecutive rows | column?, periods? (default 1) |
+| transform.normalize_pct | normalize numeric columns to percentages | axis? (columns=row-wise, index=col-wise) |
+| transform.apply_expr | apply math expression to create new column (e.g. "price / area") | expression, new_name? |
+| transform.flatten_columns | flatten multi-level columns to snake_case | (none) |
+| transform.resample | resample time series to different frequency (D/W/M/Q/Y) | column? (date col), freq? (default M), agg? (mean/sum) |
+| transform.cross_join | cartesian product of unique values from two columns | columns (list of 2) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
