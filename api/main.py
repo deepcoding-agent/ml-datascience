@@ -19,6 +19,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.routes.auto_clean import router as auto_clean_router
 from api.routes.chat import router as chat_router
 from api.routes.eda_report import router as eda_router
 from api.routes.models import router as models_router
@@ -34,6 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auto_clean_router)
 app.include_router(chat_router)
 app.include_router(eda_router)
 app.include_router(models_router)
