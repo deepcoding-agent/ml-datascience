@@ -1,12 +1,16 @@
-"""AI Planner — produces structured JSON execution plans.
+"""AI Planner — two-stage routing for efficient handler selection.
 
-The planner reads the user message and dataset context, then outputs
-a structured plan where each step explicitly specifies either a
-handler (instant, 0 LLM calls) or codegen (LLM-generated code).
+Stage 1 (Router): Lightweight LLM call classifies message into
+  1-2 categories (stats/clean/transform/viz/feature/nlp/analysis)
+  or direct_answer. ~200 tokens output.
+
+Stage 2 (Planner): Full planner only sees handlers from the selected
+  categories (~50-100 handlers instead of 350). Much more accurate.
 """
 from __future__ import annotations
 
 import json
+import re as _re
 
 from api.logger import get_logger
 
@@ -37,6 +41,38 @@ HANDLER_CATALOG = """\
 | stats.kurtosis | kurtosis per numeric column | (none) |
 | stats.zero_report | count zeros/empty values per column | (none) |
 | stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low) | (none) |
+| stats.mode_report | mode values per column | (none) |
+| stats.variance_report | variance per numeric column | (none) |
+| stats.range_report | range (max-min) per numeric column | (none) |
+| stats.iqr_report | interquartile range per numeric column | (none) |
+| stats.z_score_report | z-score analysis, flag extreme values | column? |
+| stats.chi2_test | chi-squared independence test between two categorical columns | columns (list of 2) |
+| stats.t_test | independent t-test: compare numeric column across two groups | column? (numeric), group_column? (categorical) |
+| stats.anova_test | one-way ANOVA: compare numeric across multiple groups | column? (numeric), group_column? (categorical) |
+| stats.mann_whitney | Mann-Whitney U non-parametric test | column? (numeric), group_column? (categorical) |
+| stats.ks_test | Kolmogorov-Smirnov normality test | column? |
+| stats.frequency_table | frequency table with cumulative percentage | column? |
+| stats.coefficient_variation | coefficient of variation (CV) per numeric column | (none) |
+| stats.correlation_rank | Spearman rank correlation matrix + heatmap | (none) |
+| stats.entropy_report | Shannon entropy per column | (none) |
+| stats.gini_report | Gini impurity per categorical column | (none) |
+| stats.missing_pattern | which columns tend to be missing together | (none) |
+| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | column? |
+| stats.group_stats | descriptive stats per group (groupby + describe) | column? (group col), value_column? |
+| stats.column_compare | compare two columns statistically | columns (list of 2) |
+| stats.mutual_info_report | mutual information scores between features | column? (target) |
+| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | (none) |
+| stats.ratio_report | compute key ratios between numeric columns | (none) |
+| stats.distribution_fit | fit best distribution (normal/lognormal/exponential) | column? |
+| stats.stability_report | check feature stability (split data, compare halves) | (none) |
+| stats.pairwise_stats | pairwise comparison between numeric columns | (none) |
+| stats.time_stats | time-series stats (autocorrelation, stationarity hint) | column? |
+| stats.top_bottom_values | top N and bottom N values of a column | column?, n? (default 5) |
+| stats.memory_report | detailed memory usage per column | (none) |
+| stats.cluster_tendency | Hopkins statistic — is data clusterable? | (none) |
+| stats.sparsity_report | sparsity analysis (zeros + nulls per column) | (none) |
+| stats.data_sample | random sample with stats summary | n? (default 10) |
+| stats.normality_comprehensive | comprehensive normality: Shapiro + D'Agostino + Anderson-Darling | column? |
 
 ### Clean (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
@@ -61,6 +97,36 @@ HANDLER_CATALOG = """\
 | clean.fill_with_value | fill nulls with specific constant | column?, value (e.g. -1, "Unknown") |
 | clean.deduplicate_by | remove duplicates by specific column(s) | column?, columns?, keep? (first/last) |
 | clean.drop_id_columns | auto-detect and drop ID-like columns | (none) |
+| clean.fix_numeric_strings | convert "$1,234" / "1.234,56" to numeric | column? |
+| clean.clean_column_names | remove special chars, spaces→underscore, lowercase | (none) |
+| clean.remove_empty_rows | remove rows where all values are null/empty | (none) |
+| clean.fill_mode | fill nulls with mode (most frequent value) | column? |
+| clean.fill_forward_backward | ffill then bfill to fill nulls | column? |
+| clean.fix_boolean | standardize yes/no/true/false/Y/N/1/0 → bool | column? |
+| clean.fix_encoding | fix mojibake/encoding issues (special chars) | column? |
+| clean.remove_html_tags | strip HTML/XML tags from strings | column? |
+| clean.clean_currency | clean currency strings ($, €, ¥, commas) → float | column? |
+| clean.standardize_dates | parse mixed date formats to consistent format | column?, format? (default %Y-%m-%d) |
+| clean.remove_non_ascii | remove non-ASCII characters | column? |
+| clean.remove_special_chars | remove special characters (keep alphanumeric + spaces) | column?, keep? (regex pattern) |
+| clean.normalize_text_case | normalize to title/upper/lower/sentence case | column?, case? (lower/upper/title/sentence) |
+| clean.cap_outliers_percentile | cap at Nth percentile | column?, lower? (default 1), upper? (default 99) |
+| clean.fill_median_by_group | fill nulls with group-level median | column (group col), value_column? |
+| clean.remove_zero_rows | remove rows where column(s) are zero | column? |
+| clean.remove_negative | remove rows with negative values | column? |
+| clean.standardize_categories | merge similar categories (strip, lower, map) | column, mapping? (dict) |
+| clean.remove_high_null_cols | drop columns above null threshold | threshold? (default 0.5) |
+| clean.clean_phone_numbers | standardize phone numbers to digits-only | column |
+| clean.split_name | split "John Doe" → first_name, last_name | column |
+| clean.fix_whitespace_names | fix " John  Doe " → "John Doe" | column? |
+| clean.remove_urls | remove URLs from text | column? |
+| clean.remove_emails | remove email addresses from text | column? |
+| clean.fix_mixed_types | convert mixed-type columns to consistent type | column? |
+| clean.fill_with_distribution | fill nulls by sampling from column distribution | column?, seed? |
+| clean.remove_rare_categories | replace categories with < N occurrences with "Other" | column, min_count? (default 5), replacement? |
+| clean.dedup_keep_latest | dedup by column keeping latest by sort column | column (key), date_column (sort) |
+| clean.fix_date_outliers | remove/clip dates outside valid range | column, min_date?, max_date?, action? (remove/clip) |
+| clean.clean_text_whitespace | normalize all whitespace (double spaces, tabs, newlines) | column? |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
@@ -91,6 +157,30 @@ HANDLER_CATALOG = """\
 | transform.split_column | split column by delimiter | column, delimiter? |
 | transform.concat_columns | concatenate columns into one | columns, separator?, new_name? |
 | transform.qcut | quantile-based binning (equal frequency) | column, n? (default 4) |
+| transform.merge | merge/group by key column, aggregate numeric cols | column (key), how? (inner/left/right/outer) |
+| transform.transpose | transpose DataFrame (swap rows and columns) | (none) |
+| transform.drop_rows | drop rows by index range or specific indices | start?, end?, indices? (list) |
+| transform.shuffle | randomly shuffle all rows | seed? (default 42) |
+| transform.train_test_split | split into train/test sets, adds _split column | test_size? (default 0.2), seed?, column? (stratify) |
+| transform.clip | clip numeric values to min/max bounds | column?, min?, max? |
+| transform.where | replace values where condition is NOT met | column, operator, value, replacement? |
+| transform.explode | explode comma-separated/list column into separate rows | column, delimiter? |
+| transform.encode_binary | encode column as 0/1 based on threshold or specific value | column, threshold?, value? |
+| transform.pct_change | compute percentage change between consecutive rows | column?, periods? (default 1) |
+| transform.normalize_pct | normalize numeric columns to percentages | axis? (columns=row-wise, index=col-wise) |
+| transform.apply_expr | apply math expression to create new column (e.g. "price / area") | expression, new_name? |
+| transform.flatten_columns | flatten multi-level columns to snake_case | (none) |
+| transform.resample | resample time series to different frequency (D/W/M/Q/Y) | column? (date col), freq? (default M), agg? (mean/sum) |
+| transform.cross_join | cartesian product of unique values from two columns | columns (list of 2) |
+| transform.encode_ordinal | ordinal encode with custom order list (or alphabetical) | column, order? (list) |
+| transform.shift_column | shift column values up/down by N rows (lag/lead) | column, periods? (default 1) |
+| transform.winsorize | cap extreme values at percentile bounds | column?, lower? (default 0.05), upper? (default 0.95) |
+| transform.stack_columns | stack selected columns into long format (col_name, col_value) | columns? (list) |
+| transform.unstack_column | unstack/pivot a column to wide format | index?, column, value? |
+| transform.reorder_columns | reorder columns alphabetically or by list | order? (list of col names) |
+| transform.duplicate_column | duplicate a column with a new name | column, new_name? |
+| transform.fill_forward | forward-fill (ffill) nulls only | column? |
+| transform.interpolate_values | interpolate missing numeric values (linear/etc) | column?, method? (default linear) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
@@ -114,6 +204,34 @@ HANDLER_CATALOG = """\
 | viz.qq_plot | QQ plot for normality check | column? |
 | viz.density_plot | KDE density plot | column?, group? |
 | viz.strip_plot | jitter/strip showing individual points | column?, group? |
+| viz.donut_chart | donut chart (pie with hole) | column? |
+| viz.grouped_bar | grouped bar chart (2 categoricals side-by-side) | columns? (list: [x, color]) |
+| viz.percent_bar | 100% stacked bar chart (proportions) | columns? (list: [x, color]) |
+| viz.pareto_chart | pareto chart (bar + cumulative line) | column? |
+| viz.waterfall_chart | waterfall chart (incremental changes) | column?, category? |
+| viz.funnel_chart | funnel chart (stages/flow) | column? |
+| viz.radar_chart | radar/spider chart (normalized means) | (none, uses up to 8 numeric cols) |
+| viz.lollipop_chart | lollipop chart (dot + stem line) | column? |
+| viz.dual_axis | dual Y-axis chart (two numeric cols) | columns? (list: [y1, y2]) |
+| viz.histogram_2d | 2D histogram / density heatmap | columns? (list: [x, y]) |
+| viz.ecdf_plot | empirical cumulative distribution function | column? |
+| viz.step_chart | step chart (discrete steps) | column? |
+| viz.error_bar_chart | bar chart with std error bars | column? (numeric), group? (categorical) |
+| viz.ridgeline | ridgeline/joy plot (overlapping distributions) | column? (numeric), group? (categorical) |
+| viz.dot_plot | Cleveland dot plot | column? (categorical), value? (numeric) |
+| viz.polar_chart | polar/radial bar chart | column? |
+| viz.sankey_chart | Sankey flow diagram between 2 categoricals | columns? (list: [source, target]) |
+| viz.candlestick | candlestick/OHLC chart | open?, high?, low?, close? |
+| viz.contour_plot | contour density plot of 2 numeric cols | columns? (list: [x, y]) |
+| viz.cumulative_line | cumulative sum line chart | column? |
+| viz.null_bar | null percentage per column bar chart | (none) |
+| viz.top_n_bar | top N values bar chart | column?, n? (default 10) |
+| viz.correlation_scatter | scatter with trendline and R value | columns? (list: [x, y]) |
+| viz.range_plot | range/band plot (min-max over categories) | column? (numeric), group? (categorical) |
+| viz.swarm_plot | jitter/swarm plot with better spread | column?, group? |
+| viz.comparison_bar | side-by-side comparison of 2 numeric cols | columns? (list: [a, b]) |
+| viz.marimekko | Marimekko/mosaic chart (variable-width bars) | columns? (list: [x, color]) |
+| viz.gauge_chart | single-value gauge chart | column?, agg? (mean/median/sum/min/max) |
 
 ### Feature Engineering
 | id | what it does | params |
@@ -138,6 +256,36 @@ HANDLER_CATALOG = """\
 | feature.quantile_transform | map values to uniform/normal distribution | column?, distribution? (normal/uniform) |
 | feature.diff_features | create difference features (first/second order) | column?, periods? (default 1) |
 | feature.aggregation_features | group-by stats as new features (mean/std/count) | column? (group-by col), agg_column? |
+| feature.log1p_transform | log(1+x) transform for skewed non-negative data | column? |
+| feature.interaction_features | multiply pairs of numeric columns | columns? |
+| feature.bin_numeric | custom binning with optional labels | column, n? (bins, default 5), labels? |
+| feature.abs_transform | absolute value transform | column? |
+| feature.reciprocal_transform | 1/x reciprocal transform (zeros become NaN) | column? |
+| feature.count_encode | encode categoricals by absolute count | column? |
+| feature.rare_category_encode | group rare categories into 'Other' | column?, min_count? (default 5) |
+| feature.is_null_features | create binary is_null flags for columns with nulls | (none) |
+| feature.is_zero_features | create binary is_zero flags for numeric columns | (none) |
+| feature.rank_transform | percent rank (0-1) for numeric columns | column? |
+| feature.kbins_discretize | KBins discretizer (uniform/quantile/kmeans) | column?, n? (bins, default 5), strategy? (quantile/uniform/kmeans) |
+| feature.hash_encode | hash encoding for high-cardinality categoricals | column?, n? (features, default 8) |
+| feature.ordinal_encode | ordinal encoding with auto-detected alphabetical order | column? |
+| feature.label_binarize | multi-label binarization — one column per unique value | column |
+| feature.exponential_transform | exponential transform (e^x) | column? |
+| feature.sin_cos_hour | sin/cos encoding for hour-of-day (period=24) | column? |
+| feature.is_weekend | weekend flag (1/0) from datetime column | column? |
+| feature.is_holiday | basic holiday detection (weekends + common fixed dates) | column? |
+| feature.time_since | days since reference date or first date | column?, reference? |
+| feature.distance_from_mean | distance from column mean or median | column?, method? (mean/median) |
+| feature.clip_features | clip values to percentile range | column?, lower? (default 0.01), upper? (default 0.99) |
+| feature.auto_feature_select | auto-select: drop low-variance + high-correlation | var_threshold? (default 0.01), corr_threshold? (default 0.95) |
+| feature.feature_cross | cross two categorical columns (A_x_B combinations) | columns? (list of 2) |
+| feature.rolling_stats_features | rolling mean/std/min/max as feature columns | column?, window? (default 3) |
+| feature.ewm_features | exponentially weighted moving mean/std | column?, span? (default 5) |
+| feature.target_binary_encode | encode target as binary (above/below median) | column? (target) |
+| feature.zscore_features | add z-score columns for numeric features | column? |
+| feature.boxcox_transform | Box-Cox transform (positive values only) | column? |
+| feature.yeo_johnson_transform | Yeo-Johnson transform (handles negatives) | column? |
+| feature.winsorize | cap extreme values at percentile bounds | column?, lower? (default 0.05), upper? (default 0.95) |
 
 ### NLP / Text Preprocessing (for text/language datasets → output_type "generate" unless noted)
 | id | what it does | params |
@@ -150,14 +298,14 @@ HANDLER_CATALOG = """\
 | nlp.ngrams | extract word n-gram features via TF-IDF | column?, n? (gram size, default 2), max_features? |
 | nlp.regex_extract | extract patterns: email/url/hashtag/mention/phone/number/custom | column?, pattern? (email/url/hashtag/mention/phone/number/all), regex? |
 | nlp.sentiment_score | lexicon-based sentiment scoring (positive/negative/compound) + chart | column? |
-| nlp.word_frequency | top-N word frequency analysis with bar chart (output_type=query) | column?, n? (default 20), remove_stopwords? |
+| nlp.word_frequency | ★ CORPUS-WIDE top-N most frequent words ACROSS ALL ROWS combined + bar chart (use for "top keywords in data", "most common words") | column?, n? (default 20), remove_stopwords? |
 | nlp.text_similarity | cosine similarity matrix using TF-IDF + heatmap (output_type=query) | column? |
 | nlp.vocab_stats | vocabulary statistics: unique tokens, TTR, avg word length, hapax (output_type=query) | column? |
 | nlp.text_normalize | normalize: strip accents + basic stemming + lowercase | column?, stem? (default true) |
 | nlp.language_detect | detect language per row from Unicode character ranges + pie chart | column? |
 | nlp.hash_vectorize | feature hashing — fast, memory-efficient text vectorization | column?, n? (features, default 32) |
 | nlp.text_encode | encode text as integer sequences (word→ID) for deep learning | column?, max_vocab? (default 5000), max_len? (default 100) |
-| nlp.keyword_extract | extract top-N keywords per document using TF-IDF scores | column?, n? (keywords per doc, default 5) |
+| nlp.keyword_extract | extract top-N keywords PER EACH ROW individually (NOT corpus-wide) using TF-IDF | column?, n? (keywords per doc, default 5) |
 | nlp.char_features | character-level features: punct/digit/upper/lower/space ratios, avg word length | column? |
 | nlp.sentence_features | sentence-level stats: count, avg/min/max length, question/exclamation counts | column? |
 | nlp.readability_score | readability metrics: Flesch Reading Ease, Coleman-Liau, ARI | column? |
@@ -187,6 +335,11 @@ HANDLER_CATALOG = """\
 | nlp.text_count_pattern | count occurrences of a pattern per row, optionally filter | column?, pattern, filter? (bool) |
 | nlp.text_summary_report | comprehensive text dataset report: stats, quality, recommendations (output_type=query) | column? |
 | nlp.text_stratified_sample | stratified random sample maintaining label distribution | column? (label col), n? (default 100) |
+| nlp.text_ngram_frequency | word n-gram frequency analysis with bar chart (output_type=query) | column?, n? (gram size, default 2), top? (default 20) |
+| nlp.text_extract_numbers | extract all numbers from text into a new column | column? |
+| nlp.text_remove_rare | remove words appearing below frequency threshold | column?, min_freq? (default 2) |
+| nlp.text_pos_patterns | detect POS-like surface patterns: all_caps/capitalized/numeric ratios | column? |
+| nlp.text_diversity_index | Simpson diversity index of words per document | column? |
 
 ### Analysis (smart, high-level — use for complex questions, comparisons, insights)
 | id | what it does | params |
@@ -201,13 +354,56 @@ HANDLER_CATALOG = """\
 | analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
 | analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
 | analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
+| analysis.cluster_kmeans | K-Means clustering with auto k selection (silhouette) + 2D scatter | max_k? (default 8) |
+| analysis.pca_2d | PCA 2D projection with explained variance + scatter | (none) |
+| analysis.outlier_isolation_forest | Isolation Forest anomaly detection + scatter | contamination? (default 0.05) |
+| analysis.feature_selection_auto | automatic feature selection (variance + correlation + mutual info) | column? (target) |
+| analysis.distribution_analysis | distribution shape analysis (skew, kurtosis, normality) per numeric col | (none) |
+| analysis.missing_value_analysis | deep missing value pattern analysis (co-occurrence, MCAR hint) | (none) |
+| analysis.categorical_analysis | deep analysis of all categorical columns (cardinality, mode, entropy) | (none) |
+| analysis.numeric_summary | comprehensive numeric columns summary in one table | (none) |
+| analysis.hypothesis_test | auto choose t-test/Mann-Whitney based on normality | column? (numeric), group_column? (categorical) |
+| analysis.regression_quick | quick OLS linear regression + scatter + R-squared + coefficients | column? (target), feature? |
+| analysis.top_n_analysis | analyze top N rows by a metric with details | column?, n? (default 10) |
+| analysis.bottom_n_analysis | analyze bottom N rows by a metric | column?, n? (default 10) |
+| analysis.percentile_analysis | compare stats across percentile bands (Q1-Q4) | column? |
+| analysis.variance_analysis | variance contribution per feature (% of total variance) | (none) |
+| analysis.change_point_detect | detect change points in numeric series (sliding window mean diff) | column?, window? (default 10) |
+| analysis.target_analysis | analyze relationship between each feature and a target column | column? (target) |
+| analysis.multicollinearity_check | VIF-based multicollinearity detection | (none) |
+| analysis.ab_test | A/B test with significance (p-value, effect size, confidence interval) | column? (metric), group_column? |
+| analysis.pareto_analysis | Pareto 80/20 rule analysis on a column | column? |
+| analysis.data_completeness | data completeness scorecard per column + overall score | (none) |
+| analysis.seasonality_detect | detect seasonality via autocorrelation + chart | column? |
+| analysis.cluster_profile | profile each cluster's characteristics after K-Means | n? (clusters, default 3) |
+| analysis.feature_interaction | detect feature interaction effects on target | column? (target) |
+| analysis.cohort_analysis | cohort-based analysis by categorical groups | column? (group), value_column? |
+| analysis.rfm_analysis | RFM scoring on first 3 numeric columns | (none) |
+| analysis.gap_analysis | find significant gaps in sorted numeric data | column? |
+| analysis.benchmark_compare | compare column means against benchmark targets | benchmarks? (dict) |
+| analysis.sensitivity_analysis | sensitivity of target to each feature | column? (target) |
+| analysis.correlation_network | correlation edges above threshold | threshold? (default 0.5) |
+| analysis.feature_drift | compare first/second half distributions | (none) |
+| analysis.sample_bias_check | check sampling bias vs full population | sample_frac? (default 0.3) |
+| analysis.effect_size | Cohen's d effect sizes between two groups | column? (group col) |
+| analysis.bootstrap_ci | bootstrap confidence intervals for column mean | column?, n_bootstrap?, confidence? |
+| analysis.cross_correlation | cross-correlation between two columns at various lags | columns? (list of 2) |
+| analysis.survival_curve | basic survival/retention curve | column? |
+| analysis.concentration_analysis | Lorenz curve + Gini coefficient | column? |
+| analysis.diminishing_returns | detect diminishing returns between two columns | columns? (list of 2) |
+| analysis.categorical_target_crosstab | crosstab heatmap of two categorical columns | column? (target), feature_column? |
+| analysis.prediction_baseline | compute naive prediction baselines (mean/mode) | column? (target) |
+| analysis.data_readiness_score | overall ML data readiness score (completeness, balance, size) | (none) |
 """
 
 PLANNER_PROMPT = """\
 You are the planner for a data-science agent. Given a user request and dataset,
 output a JSON execution plan.
 
-## USER REQUEST
+## CONVERSATION HISTORY (recent messages for context)
+{conversation_history}
+
+## CURRENT USER REQUEST
 {user_message}
 
 ## DATASET
@@ -281,6 +477,11 @@ When the user works with text/NLP data or asks to prepare text for ML:
    - Capture phrases → nlp.ngrams (bigrams/trigrams)
 3. **Analysis** (read-only, query): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity, nlp.collocations, nlp.word_cloud, nlp.class_balance_text
 4. **Feature extraction** (generate): nlp.sentiment_score, nlp.regex_extract, nlp.language_detect, nlp.char_features, nlp.sentence_features, nlp.readability_score, nlp.emoji_features, nlp.keyword_extract, nlp.spelling_features
+5. **IMPORTANT — keyword/word frequency distinction**:
+   - "top keywords across all rows" / "คำที่เยอะที่สุดรวมทุก rows" → **nlp.word_frequency** (corpus-wide aggregate)
+   - "keywords per each row" / "keyword ของแต่ละ row" → nlp.keyword_extract (per-document)
+   - "word cloud" / "show common words" → nlp.word_cloud (corpus-wide treemap)
+   - If user says "รวมทุก rows" or "across all" or "ทั้งหมด" → ALWAYS use nlp.word_frequency, NOT keyword_extract
 5. **Data prep**: nlp.text_dedup (remove duplicates), nlp.text_filter (remove short/empty), nlp.text_mask_pii (anonymize), nlp.text_chunk (split long docs), nlp.text_augment (expand small datasets), nlp.text_concat (merge text columns)
 6. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
 
@@ -297,6 +498,14 @@ When the user asks complex analytical questions, prefer analysis handlers over c
 - "segment the data" / "แบ่งกลุ่มข้อมูล" → analysis.segment_analysis
 - "analyze this data" / "วิเคราะห์ข้อมูล" / "EDA" → analysis.auto_eda
 
+### Follow-up questions — USE CONVERSATION HISTORY
+When the user says "plot that", "show me", "ขอแบบ plot", "ทำเป็น chart", "เดิม", "อันเดิม"
+or refers to something from a previous message:
+1. Read the CONVERSATION HISTORY section above
+2. Identify which column/topic was discussed previously
+3. Use THAT column — do NOT pick a random default column
+Example: if history says "parking value counts" and user says "plot it" → use column="parking"
+
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Keep plans SHORT: 1 step if possible, 2-3 for multi-part, max 5 steps.
@@ -309,17 +518,9 @@ When the user asks complex analytical questions, prefer analysis handlers over c
 9. For "correlation" (no chart word) → stats.correlation
 10. For "correlation heatmap" → viz.heatmap
 11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
-12. If the message is NOT about the dataset at all → use direct_answer (see format below).
+12. For multi-step requests ("clean then show chart"), create multiple steps spanning categories.
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
-
-For direct_answer (NOT about the dataset):
-{{
-  "understanding": "one sentence",
-  "output_type": "text",
-  "direct_answer": true,
-  "steps": []
-}}
 
 For handler steps:
 {{"step_num":1,"description":"...","handler":{{"id":"category.sub","params":{{}}}}}}
@@ -399,35 +600,195 @@ User: "show distribution of price" (distribution intent → histogram)
 User: "plot price vs area" (relationship intent → scatter)
 {{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
 
-User: "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" (general question, NOT about dataset)
-{{"understanding":"General question about word frequency — not related to the dataset","output_type":"text","direct_answer":true,"steps":[]}}
+User: "remove duplicates, fill nulls, then show a bar chart of bedrooms" (multi-step, 3 categories)
+{{"understanding":"Clean dataset then visualize","output_type":"generate","steps":[{{"step_num":1,"description":"Remove duplicates","handler":{{"id":"clean.remove_duplicates","params":{{}}}}}},{{"step_num":2,"description":"Fill missing values","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"auto"}}}}}},{{"step_num":3,"description":"Bar chart of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"bedrooms"}}}}}}]}}
 
-User: "what is machine learning?" (general knowledge)
-{{"understanding":"General knowledge question","output_type":"text","direct_answer":true,"steps":[]}}
+User: "ลบ outliers แล้วทำ EDA" (clean then analyze — 2 steps)
+{{"understanding":"Remove outliers then auto EDA","output_type":"generate","steps":[{{"step_num":1,"description":"Remove outliers","handler":{{"id":"clean.remove_outliers","params":{{}}}}}},{{"step_num":2,"description":"Automated EDA","handler":{{"id":"analysis.auto_eda","params":{{}}}}}}]}}
 
-User: "thank you" (casual chat)
-{{"understanding":"Casual response","output_type":"text","direct_answer":true,"steps":[]}}
+User: "fill nulls with median and encode categoricals" (clean + transform — 2 steps)
+{{"understanding":"Fill nulls then encode","output_type":"generate","steps":[{{"step_num":1,"description":"Fill nulls with median","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"median"}}}}}},{{"step_num":2,"description":"Label encode categoricals","handler":{{"id":"transform.encode_label","params":{{}}}}}}]}}
 
-User: "1+1 เท่ากับเท่าไหร่" (simple math, not about data)
-{{"understanding":"Simple math question","output_type":"text","direct_answer":true,"steps":[]}}
-
-User: "how do I write a for loop?" (coding help)
-{{"understanding":"Programming question","output_type":"text","direct_answer":true,"steps":[]}}
+User: "check data quality and show missing values chart" (analysis + viz — 2 steps)
+{{"understanding":"Data quality then null chart","output_type":"query","steps":[{{"step_num":1,"description":"Data quality report","handler":{{"id":"analysis.data_quality","params":{{}}}}}},{{"step_num":2,"description":"Missing values chart","handler":{{"id":"viz.null_bar","params":{{}}}}}}]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
+
+
+# ── Stage 1: Category router ────────────────────────────────────────────────
+
+ROUTER_PROMPT = """\
+Classify this user message into 1-3 handler categories for a data-science agent.
+
+User: "{user_message}"
+Columns: {columns}
+
+Categories:
+- stats: statistics, counts, distributions, tests, reports, data info, describe, nulls, shape
+- clean: fix quality, fill nulls, remove duplicates, fix types, standardize, remove outliers
+- transform: filter, sort, group, encode, scale, split, merge, reshape, math, train/test split
+- viz: charts, plots, graphs, visualizations, show/display data visually
+- feature: feature engineering, log/pca/encode transforms, create new derived features
+- nlp: text processing, tokenize, sentiment, keywords, word frequency, text cleaning, NLP
+- analysis: deep analysis, compare, cluster, anomaly, correlation, EDA, ML readiness, trends
+- direct_answer: NOT about the dataset — general knowledge, casual chat, math, coding help
+
+Rules:
+- Pick 1 category for simple requests ("show nulls" → stats)
+- Pick 2-3 categories when the request spans multiple operations ("clean then show chart" → clean, viz)
+- If user says "then"/"and"/"แล้วก็" → likely multi-category
+- direct_answer: only for questions completely unrelated to the data
+
+Output ONLY JSON: {{"categories": ["cat1"], "direct_answer": false}}
+Or: {{"categories": [], "direct_answer": true}}"""
+
+
+def _split_catalog_by_category() -> dict[str, str]:
+    """Split HANDLER_CATALOG into per-category sections."""
+    sections: dict[str, str] = {}
+    current_key = ""
+    current_lines: list[str] = []
+
+    category_map = {
+        "Stats": "stats", "Clean": "clean", "Transform": "transform",
+        "Viz": "viz", "Feature": "feature", "NLP": "nlp", "Analysis": "analysis",
+    }
+
+    for line in HANDLER_CATALOG.split("\n"):
+        if line.startswith("### "):
+            if current_key and current_lines:
+                sections[current_key] = "\n".join(current_lines)
+            # Map header to category key
+            header = line[4:].strip()
+            current_key = ""
+            for prefix, key in category_map.items():
+                if header.startswith(prefix):
+                    current_key = key
+                    break
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    if current_key and current_lines:
+        sections[current_key] = "\n".join(current_lines)
+
+    return sections
+
+
+_CATALOG_SECTIONS: dict[str, str] = {}
+
+
+def _get_catalog_sections() -> dict[str, str]:
+    """Lazy-init catalog sections."""
+    global _CATALOG_SECTIONS
+    if not _CATALOG_SECTIONS:
+        _CATALOG_SECTIONS = _split_catalog_by_category()
+    return _CATALOG_SECTIONS
+
+
+def _route_categories(
+    user_message: str, columns: list[str], model_id: str | None,
+) -> tuple[list[str], bool]:
+    """Stage 1: Lightweight LLM call to classify intent into categories.
+
+    Uses low max_tokens (150) for speed — this is just classification,
+    not generation. Separate LLM instance to avoid polluting the cache.
+    """
+    from api.llm import get_llm
+
+    prompt = ROUTER_PROMPT.format(
+        user_message=user_message,
+        columns=", ".join(columns[:15]),
+    )
+
+    try:
+        router_llm = get_llm(temperature=0.0, max_tokens=150, model_id=model_id)
+        response = router_llm.invoke(prompt)
+        raw = response.content.strip()
+        if "```" in raw:
+            raw = raw.split("```json")[-1].split("```")[0].strip() if "```json" in raw else raw.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(raw)
+        categories = result.get("categories", [])
+        direct = result.get("direct_answer", False)
+
+        valid_cats = {"stats", "clean", "transform", "viz", "feature", "nlp", "analysis"}
+        categories = [c for c in categories if c in valid_cats][:3]
+
+        log.info("  router → categories=%s, direct_answer=%s", categories, direct)
+        return categories, bool(direct)
+    except Exception as e:
+        log.warning("  router failed (%s), falling back to full catalog", e)
+        return [], False
+
+
+def _build_focused_catalog(categories: list[str]) -> str:
+    """Build a catalog containing only the selected categories."""
+    sections = _get_catalog_sections()
+    if not categories:
+        return HANDLER_CATALOG  # fallback to full catalog
+
+    parts = [sections[cat] for cat in categories if cat in sections]
+    return "\n\n".join(parts)
+
+
+# ── Stage 2: Focused planner ───────────────────────────────────────────────
+
+def _format_history(history: list | None) -> str:
+    """Format recent conversation history for the planner prompt."""
+    if not history:
+        return "(no previous messages)"
+    lines: list[str] = []
+    for msg in history[-6:]:
+        role = msg.role if hasattr(msg, "role") else msg.get("role", "?")
+        content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+        # Truncate long messages
+        if len(content) > 500:
+            content = content[:500] + "..."
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines) if lines else "(no previous messages)"
 
 
 def plan_steps(
     user_message: str,
     df_context: str,
     llm,
+    model_id: str | None = None,
+    history: list | None = None,
 ) -> dict:
-    """Ask LLM to plan execution steps. Returns structured plan dict."""
+    """Two-stage planning: route → focused plan.
+
+    Stage 1: Lightweight router (max_tokens=150) classifies into 1-3 categories
+    Stage 2: Planner sees only relevant handlers (~50-150 instead of 350)
+             + conversation history for follow-up context
+    """
+    # Extract column names for router
+    col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
+    columns = col_match[:15] if col_match else []
+
+    # Stage 1: Route (lightweight, ~150 tokens)
+    categories, is_direct = _route_categories(user_message, columns, model_id)
+
+    if is_direct:
+        log.info("  router → direct_answer")
+        return {
+            "understanding": "Not about the dataset",
+            "output_type": "text",
+            "direct_answer": True,
+            "steps": [],
+        }
+
+    # Stage 2: Build focused catalog and plan
+    focused_catalog = _build_focused_catalog(categories)
+    handler_count = focused_catalog.count("| ")
+    log.info("  focused catalog: %d categories, ~%d handler rows", len(categories), handler_count // 3)
+
     prompt = PLANNER_PROMPT.format(
         user_message=user_message,
         df_context=df_context,
-        handler_catalog=HANDLER_CATALOG,
+        handler_catalog=focused_catalog,
+        conversation_history=_format_history(history),
     )
 
     response = llm.invoke(prompt)

@@ -1,4 +1,4 @@
-"""NLP / Text preprocessing handler — 45 handlers for text cleaning,
+"""NLP / Text preprocessing handler — 50 handlers for text cleaning,
 tokenization, vectorization, and NLP feature engineering."""
 from __future__ import annotations
 
@@ -1990,4 +1990,174 @@ class NlpHandler(BaseHandler):
         return HandlerResult(
             success=True, result_df=result, output_type="generate",
             summary=f"Stratified sample: {len(df)} → {len(result)} rows, {n_classes} classes. Distribution: {new_dist}",
+        )
+
+    # ── 46. N-gram frequency analysis ───────────────────────────────────
+
+    @staticmethod
+    def handle_text_ngram_frequency(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Word n-gram frequency analysis with bar chart (output_type=query)."""
+        col = params.get("column")
+        n = int(params.get("n", 2))
+        top_k = int(params.get("top", 20))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        all_ngrams: Counter = Counter()
+        for text in df[target].fillna("").astype(str).str.lower():
+            words = re.findall(r"\b\w+\b", text)
+            words = [w for w in words if w not in ENGLISH_STOPWORDS]
+            for i in range(len(words) - n + 1):
+                gram = " ".join(words[i:i + n])
+                all_ngrams[gram] += 1
+
+        top = all_ngrams.most_common(top_k)
+        if not top:
+            return HandlerResult(success=True, summary="No n-grams found", output_type="query")
+
+        result_df = pd.DataFrame(top, columns=["ngram", "count"])
+        fig = px.bar(result_df, x="count", y="ngram", orientation="h")
+        fig.update_traces(marker_color="#FB8C3C")
+        _style(fig, title=f"Top {len(top)} {n}-grams — {target}")
+        fig.update_layout(yaxis=dict(autorange="reversed"))
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Top {len(top)} {n}-grams from '{target}': {top[0][0]} ({top[0][1]}x), {top[1][0] if len(top)>1 else ''}",
+        )
+
+    # ── 47. Extract numbers from text ───────────────────────────────────
+
+    @staticmethod
+    def handle_text_extract_numbers(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract all numbers from text into a new column (comma-separated)."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        result = df.copy()
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+            result[f"{c}_numbers"] = s.apply(
+                lambda t: ",".join(re.findall(r"-?\d+\.?\d*", t))
+            )
+            result[f"{c}_number_count"] = s.apply(
+                lambda t: len(re.findall(r"-?\d+\.?\d*", t))
+            )
+            created.extend([f"{c}_numbers", f"{c}_number_count"])
+
+        total = int(result[[c for c in created if c.endswith("_number_count")]].sum().sum())
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted numbers from {len(text_cols)} column(s): {total} numbers found across all rows",
+        )
+
+    # ── 48. Remove rare words ───────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_remove_rare(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Remove words appearing below a frequency threshold from text."""
+        col = params.get("column")
+        min_freq = int(params.get("min_freq", 2))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        result = df.copy()
+        for c in text_cols:
+            s = result[c].fillna("").astype(str).str.lower()
+            # Build corpus-wide word frequencies
+            word_freq: Counter = Counter()
+            for text in s:
+                word_freq.update(re.findall(r"\b\w+\b", text))
+
+            rare_words = {w for w, cnt in word_freq.items() if cnt < min_freq}
+
+            def _remove(text: str) -> str:
+                words = text.split()
+                return " ".join(w for w in words if w.lower() not in rare_words)
+
+            result[c] = result[c].fillna("").astype(str).apply(_remove)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Removed words with freq < {min_freq} from {len(text_cols)} column(s) ({len(rare_words)} rare words removed)",
+        )
+
+    # ── 49. POS-like pattern detection ──────────────────────────────────
+
+    @staticmethod
+    def handle_text_pos_patterns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Detect POS-like surface patterns: all_caps ratio, capitalized ratio,
+        numeric word ratio per row. Lightweight alternative to full POS tagging."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        result = df.copy()
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+
+            def _patterns(text: str) -> dict:
+                words = re.findall(r"\b\w+\b", text)
+                n = max(len(words), 1)
+                all_caps = sum(1 for w in words if w.isupper() and len(w) > 1)
+                capitalized = sum(1 for w in words if w and w[0].isupper() and not w.isupper())
+                numeric = sum(1 for w in words if re.match(r"^-?\d+\.?\d*$", w))
+                return {
+                    "all_caps_ratio": round(all_caps / n, 4),
+                    "capitalized_ratio": round(capitalized / n, 4),
+                    "numeric_word_ratio": round(numeric / n, 4),
+                }
+
+            stats = s.apply(_patterns).apply(pd.Series)
+            for feat in ["all_caps_ratio", "capitalized_ratio", "numeric_word_ratio"]:
+                result[f"{c}_{feat}"] = stats[feat]
+                created.append(f"{c}_{feat}")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted {len(created)} POS-pattern features from {len(text_cols)} column(s)",
+        )
+
+    # ── 50. Text diversity index ────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_diversity_index(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Compute Simpson diversity index of words per document.
+        Higher values indicate more diverse vocabulary within a text."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        result = df.copy()
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str).str.lower()
+
+            def _simpson(text: str) -> float:
+                words = re.findall(r"\b\w+\b", text)
+                n = len(words)
+                if n <= 1:
+                    return 0.0
+                freq = Counter(words)
+                denom = n * (n - 1)
+                numerator = sum(cnt * (cnt - 1) for cnt in freq.values())
+                return round(1.0 - (numerator / denom), 4)
+
+            result[f"{c}_diversity"] = s.apply(_simpson)
+            created.append(f"{c}_diversity")
+
+        mean_div = result[created[0]].mean()
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Simpson diversity index for {len(text_cols)} column(s) (mean={mean_div:.4f})",
         )

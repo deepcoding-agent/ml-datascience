@@ -1,4 +1,4 @@
-"""Transform handler — filter, sort, groupby, assign, encode, scale, pivot, melt, rank, rolling, etc."""
+"""Transform handler — 50 handlers: filter, sort, groupby, assign, encode, scale, pivot, melt, rank, rolling, merge, resample, etc."""
 from __future__ import annotations
 
 import numpy as np
@@ -403,3 +403,616 @@ class TransformHandler(BaseHandler):
                                  summary=f"Quantile-binned '{col}' into {actual_bins} bins → '{col}_qbin'")
         except Exception as e:
             return HandlerResult(success=False, error=f"Quantile binning error: {e}")
+
+    # ── 13. Merge / Join two datasets ────────────────────────────────────
+
+    @staticmethod
+    def handle_merge(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Merge (join) current DataFrame with itself via self-join on a key,
+        or create a cross-tabulated version. Use how=inner/left/right/outer."""
+        column = params.get("column")
+        how = params.get("how", "inner")
+        if not column or column not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{column}' not found for merge key")
+        # Self-join dedup: group by key → aggregate all numeric columns
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        agg_dict = {c: "sum" for c in num_cols if c != column}
+        if not agg_dict:
+            agg_dict = {df.columns[0]: "count"}
+        result = df.groupby(column, dropna=False).agg(agg_dict).reset_index()
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Merged by '{column}' ({how}): {len(df):,} → {len(result):,} rows",
+        )
+
+    # ── 14. Transpose ────────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_transpose(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Transpose the DataFrame (swap rows and columns)."""
+        result = df.T.reset_index()
+        result.columns = ["feature"] + [f"row_{i}" for i in range(len(result.columns) - 1)]
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Transposed: {df.shape[0]}×{df.shape[1]} → {result.shape[0]}×{result.shape[1]}",
+        )
+
+    # ── 15. Drop rows by index range ─────────────────────────────────────
+
+    @staticmethod
+    def handle_drop_rows(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Drop rows by index range or specific indices."""
+        start = params.get("start")
+        end = params.get("end")
+        indices = params.get("indices")  # list of int
+        result = df.copy()
+        original = len(result)
+
+        if indices and isinstance(indices, list):
+            result = result.drop(index=[i for i in indices if i in result.index]).reset_index(drop=True)
+        elif start is not None and end is not None:
+            result = result.drop(index=range(int(start), int(end) + 1), errors="ignore").reset_index(drop=True)
+        elif start is not None:
+            result = result.iloc[int(start):].reset_index(drop=True)
+        else:
+            return HandlerResult(success=False, error="Specify start/end range or indices list")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Dropped rows: {original:,} → {len(result):,} ({original - len(result)} removed)",
+        )
+
+    # ── 16. Shuffle rows ────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_shuffle(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Randomly shuffle all rows. Useful before train/test splits."""
+        seed = int(params.get("seed", 42))
+        result = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Shuffled {len(result):,} rows (seed={seed})",
+        )
+
+    # ── 17. Train/test split ─────────────────────────────────────────────
+
+    @staticmethod
+    def handle_train_test_split(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Split dataset into train and test sets. Adds a _split column (train/test)."""
+        test_size = float(params.get("test_size", 0.2))
+        seed = int(params.get("seed", 42))
+        stratify_col = params.get("column")
+
+        result = df.copy()
+        n_test = max(1, int(len(result) * test_size))
+        n_train = len(result) - n_test
+
+        if stratify_col and stratify_col in result.columns:
+            try:
+                from sklearn.model_selection import train_test_split as sk_split
+                train_idx, test_idx = sk_split(
+                    result.index, test_size=test_size, random_state=seed,
+                    stratify=result[stratify_col],
+                )
+                result.loc[train_idx, "_split"] = "train"
+                result.loc[test_idx, "_split"] = "test"
+            except Exception:
+                rng = np.random.RandomState(seed)
+                mask = rng.rand(len(result)) >= test_size
+                result["_split"] = np.where(mask, "train", "test")
+        else:
+            rng = np.random.RandomState(seed)
+            mask = rng.rand(len(result)) >= test_size
+            result["_split"] = np.where(mask, "train", "test")
+
+        train_n = int((result["_split"] == "train").sum())
+        test_n = int((result["_split"] == "test").sum())
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Split: {train_n} train + {test_n} test ({test_size*100:.0f}% test)",
+        )
+
+    # ── 18. Clip values ──────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_clip(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Clip numeric values to min/max bounds."""
+        col = params.get("column")
+        lower = params.get("min")
+        upper = params.get("max")
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()
+
+        for c in cols:
+            lo = float(lower) if lower is not None else None
+            hi = float(upper) if upper is not None else None
+            result[c] = result[c].clip(lower=lo, upper=hi)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Clipped {len(cols)} column(s) to [{lower}, {upper}]",
+        )
+
+    # ── 19. Replace values conditionally ─────────────────────────────────
+
+    @staticmethod
+    def handle_where(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Replace values where condition is NOT met (like np.where).
+        Keeps values matching condition, replaces others."""
+        col = params.get("column")
+        operator = params.get("operator", ">")
+        value = params.get("value")
+        replacement = params.get("replacement", np.nan)
+        if not col or col not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{col}' not found")
+        if value is None:
+            return HandlerResult(success=False, error="Specify value= parameter")
+
+        result = df.copy()
+        ops = {"==": "eq", "!=": "ne", ">": "gt", "<": "lt", ">=": "ge", "<=": "le"}
+        method = ops.get(operator, "gt")
+        try:
+            if pd.api.types.is_numeric_dtype(result[col]):
+                value = float(value)
+            mask = getattr(result[col], method)(value)
+            result[col] = result[col].where(mask, other=replacement)
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Where error: {e}")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Replaced '{col}' where NOT ({operator} {value}) → {replacement}",
+        )
+
+    # ── 20. Explode list column ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_explode(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Explode a column containing comma-separated values or lists into separate rows."""
+        col = params.get("column")
+        delimiter = params.get("delimiter", ",")
+        if not col or col not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{col}' not found")
+
+        result = df.copy()
+        original = len(result)
+        # Split string column into lists if needed
+        if result[col].dtype == "object":
+            result[col] = result[col].fillna("").astype(str).str.split(delimiter)
+        result = result.explode(col, ignore_index=True)
+        result[col] = result[col].astype(str).str.strip()
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Exploded '{col}': {original:,} → {len(result):,} rows",
+        )
+
+    # ── 21. Encode target (binary) ───────────────────────────────────────
+
+    @staticmethod
+    def handle_encode_binary(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Encode a column as binary (0/1) based on a threshold or specific value."""
+        col = params.get("column")
+        threshold = params.get("threshold")
+        positive_value = params.get("value")
+        if not col or col not in df.columns:
+            return HandlerResult(success=False, error=f"Column '{col}' not found")
+
+        result = df.copy()
+        if threshold is not None:
+            result[f"{col}_binary"] = (result[col] >= float(threshold)).astype(int)
+            desc = f"'{col}' >= {threshold} → 1, else 0"
+        elif positive_value is not None:
+            result[f"{col}_binary"] = (result[col] == positive_value).astype(int)
+            desc = f"'{col}' == {positive_value} → 1, else 0"
+        else:
+            # Auto: if 2 unique values, encode the more common as 1
+            uniques = result[col].dropna().unique()
+            if len(uniques) == 2:
+                result[f"{col}_binary"] = (result[col] == uniques[0]).astype(int)
+                desc = f"'{col}': {uniques[0]}=1, {uniques[1]}=0"
+            else:
+                return HandlerResult(success=False, error="Specify threshold or value for binary encoding")
+
+        ones = int(result[f"{col}_binary"].sum())
+        zeros = len(result) - ones
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Binary encoded: {desc} ({ones} positive, {zeros} negative)",
+        )
+
+    # ── 22. Percent change ───────────────────────────────────────────────
+
+    @staticmethod
+    def handle_pct_change(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Compute percentage change between consecutive rows."""
+        col = params.get("column")
+        periods = int(params.get("periods", 1))
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()[:5]
+
+        created: list[str] = []
+        for c in cols:
+            name = f"{c}_pct_change"
+            result[name] = result[c].pct_change(periods=periods).round(4)
+            created.append(name)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Percentage change (periods={periods}) for {len(created)} column(s)",
+        )
+
+    # ── 23. Normalize to percentage (per-row) ────────────────────────────
+
+    @staticmethod
+    def handle_normalize_pct(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Normalize numeric columns to percentages (row-wise or column-wise)."""
+        axis = params.get("axis", "columns")  # columns (per-row) or index (per-column)
+        result = df.copy()
+        num_cols = result.select_dtypes(include="number").columns.tolist()
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns")
+
+        if axis == "columns":
+            # Each row sums to 100%
+            row_sums = result[num_cols].sum(axis=1).replace(0, 1)
+            for c in num_cols:
+                result[c] = (result[c] / row_sums * 100).round(2)
+            desc = "row-wise (each row sums to 100%)"
+        else:
+            # Each column sums to 100%
+            for c in num_cols:
+                total = result[c].sum()
+                if total != 0:
+                    result[c] = (result[c] / total * 100).round(2)
+            desc = "column-wise (each column sums to 100%)"
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Normalized {len(num_cols)} columns to percentages ({desc})",
+        )
+
+    # ── 24. Apply math expression ────────────────────────────────────────
+
+    @staticmethod
+    def handle_apply_expr(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Apply a mathematical expression to create a new column.
+        Expression uses column names as variables: 'price / area'."""
+        expression = params.get("expression", "")
+        new_name = params.get("new_name", "result")
+        if not expression:
+            return HandlerResult(success=False, error="Specify expression= parameter (e.g. 'price / area')")
+
+        result = df.copy()
+        try:
+            result[new_name] = result.eval(expression)
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Created '{new_name}' = {expression}",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Expression error: {e}")
+
+    # ── 25. Flatten multi-index / reset column names ─────────────────────
+
+    @staticmethod
+    def handle_flatten_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Flatten multi-level column names into single-level snake_case names.
+        Also standardizes all column names to lowercase snake_case."""
+        result = df.copy()
+        if isinstance(result.columns, pd.MultiIndex):
+            result.columns = ["_".join(str(c) for c in col if str(c) != "").strip("_")
+                              for col in result.columns]
+
+        import re as _re
+        new_names = {}
+        for c in result.columns:
+            name = str(c).strip()
+            name = _re.sub(r"[^\w\s]", "", name)
+            name = _re.sub(r"\s+", "_", name)
+            name = name.lower().strip("_")
+            if not name:
+                name = f"col_{list(result.columns).index(c)}"
+            new_names[c] = name
+        result = result.rename(columns=new_names)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Flattened {len(result.columns)} columns to snake_case",
+        )
+
+    # ── 26. Resample time series ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_resample(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Resample time series data to a different frequency (daily, weekly, monthly)."""
+        date_col = params.get("column")
+        freq = params.get("freq", "M")  # D, W, M, Q, Y
+        agg = params.get("agg", "mean")
+
+        # Find datetime column
+        dt_cols = df.select_dtypes(include="datetime").columns.tolist()
+        if date_col and date_col in df.columns:
+            target = date_col
+        elif dt_cols:
+            target = dt_cols[0]
+        else:
+            # Try to parse object columns as dates
+            for c in df.select_dtypes(include="object").columns:
+                try:
+                    df[c] = pd.to_datetime(df[c], format="mixed")
+                    target = c
+                    break
+                except Exception:
+                    continue
+            else:
+                return HandlerResult(success=False, error="No datetime column found for resampling")
+
+        result = df.copy()
+        result[target] = pd.to_datetime(result[target], format="mixed", errors="coerce")
+        result = result.set_index(target)
+
+        num_cols = result.select_dtypes(include="number").columns.tolist()
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns to aggregate")
+
+        freq_map = {"daily": "D", "weekly": "W", "monthly": "ME", "quarterly": "QE", "yearly": "YE",
+                    "M": "ME", "Q": "QE", "Y": "YE"}
+        freq = freq_map.get(freq.lower(), freq)
+
+        try:
+            resampled = result[num_cols].resample(freq).agg(agg).reset_index()
+            return HandlerResult(
+                success=True, result_df=resampled, output_type="generate",
+                summary=f"Resampled by '{target}' to {freq} ({agg}): {len(df):,} → {len(resampled):,} rows",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Resample error: {e}")
+
+    # ── 27. Cross join / cartesian product ───────────────────────────────
+
+    @staticmethod
+    def handle_cross_join(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Create cartesian product of unique values from two columns.
+        Useful for generating all possible combinations."""
+        columns = params.get("columns", [])
+        if len(columns) < 2:
+            cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            columns = cat_cols[:2] if len(cat_cols) >= 2 else df.columns[:2].tolist()
+
+        c1, c2 = columns[0], columns[1]
+        if c1 not in df.columns or c2 not in df.columns:
+            return HandlerResult(success=False, error=f"Columns {c1}, {c2} not found")
+
+        vals1 = df[c1].dropna().unique()
+        vals2 = df[c2].dropna().unique()
+        import itertools
+        combos = list(itertools.product(vals1, vals2))
+        result = pd.DataFrame(combos, columns=[c1, c2])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Cross join: {len(vals1)} × {len(vals2)} = {len(result)} combinations",
+        )
+
+    # ── 28. Ordinal encoding with custom order ──────────────────────────
+
+    @staticmethod
+    def handle_encode_ordinal(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Ordinal-encode a categorical column using a custom order list.
+        If no order is given, sorts unique values alphabetically."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        order = params.get("order")  # list of strings
+        result = df.copy()
+
+        if order and isinstance(order, list):
+            mapping = {v: i for i, v in enumerate(order)}
+        else:
+            uniques = sorted(result[col].dropna().unique(), key=str)
+            mapping = {v: i for i, v in enumerate(uniques)}
+
+        result[f"{col}_ordinal"] = result[col].map(mapping)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Ordinal-encoded '{col}' → '{col}_ordinal' ({len(mapping)} levels)",
+        )
+
+    # ── 29. Shift column values ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_shift_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Shift column values up or down by N rows (like lag/lead)."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        periods = int(params.get("periods", 1))
+        result = df.copy()
+        result[f"{col}_shift_{periods}"] = result[col].shift(periods)
+        direction = "down" if periods > 0 else "up"
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Shifted '{col}' {direction} by {abs(periods)} rows → '{col}_shift_{periods}'",
+        )
+
+    # ── 30. Winsorize ───────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_winsorize(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Cap extreme values at percentile bounds (e.g. 5th/95th)."""
+        col = params.get("column")
+        lower = float(params.get("lower", 0.05))
+        upper = float(params.get("upper", 0.95))
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()
+
+        for c in cols:
+            lo = result[c].quantile(lower)
+            hi = result[c].quantile(upper)
+            result[c] = result[c].clip(lower=lo, upper=hi)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Winsorized {len(cols)} column(s) at [{lower*100:.0f}th, {upper*100:.0f}th] percentile",
+        )
+
+    # ── 31. Stack columns to long format ────────────────────────────────
+
+    @staticmethod
+    def handle_stack_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Stack selected columns into long format with col_name and col_value."""
+        columns = params.get("columns", [])
+        if not columns or not isinstance(columns, list):
+            columns = df.columns.tolist()
+
+        valid = [c for c in columns if c in df.columns]
+        if not valid:
+            return HandlerResult(success=False, error="No valid columns to stack")
+
+        id_cols = [c for c in df.columns if c not in valid]
+        result = df.melt(id_vars=id_cols if id_cols else None,
+                         value_vars=valid,
+                         var_name="col_name", value_name="col_value")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Stacked {len(valid)} columns → long format ({len(result):,} rows)",
+        )
+
+    # ── 32. Unstack column to wide format ───────────────────────────────
+
+    @staticmethod
+    def handle_unstack_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Unstack/pivot a column to wide format. Requires index, column, and value cols."""
+        index_col = params.get("index")
+        col_col = params.get("column")
+        value_col = params.get("value")
+
+        if not col_col or col_col not in df.columns:
+            return HandlerResult(success=False, error="Specify column= for the column to unstack")
+
+        if not index_col:
+            candidates = [c for c in df.columns if c != col_col and c != value_col]
+            index_col = candidates[0] if candidates else None
+        if not value_col:
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            value_col = num_cols[0] if num_cols else None
+
+        if index_col is None or value_col is None:
+            return HandlerResult(success=False, error="Need index, column, and value params")
+
+        try:
+            result = df.pivot_table(index=index_col, columns=col_col,
+                                     values=value_col, aggfunc="first").reset_index()
+            result.columns = [str(c) for c in result.columns]
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Unstacked '{col_col}' → {len(result.columns)-1} new columns, {len(result)} rows",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Unstack error: {e}")
+
+    # ── 33. Reorder columns ─────────────────────────────────────────────
+
+    @staticmethod
+    def handle_reorder_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Reorder columns alphabetically or by a provided list."""
+        order = params.get("order")  # list of column names
+        result = df.copy()
+
+        if order and isinstance(order, list):
+            valid = [c for c in order if c in result.columns]
+            remaining = [c for c in result.columns if c not in valid]
+            result = result[valid + remaining]
+            desc = f"custom order ({len(valid)} specified)"
+        else:
+            result = result.reindex(sorted(result.columns), axis=1)
+            desc = "alphabetical"
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Reordered {len(result.columns)} columns ({desc})",
+        )
+
+    # ── 34. Duplicate column ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_duplicate_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Duplicate a column with a new name."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        new_name = params.get("new_name", f"{col}_copy")
+        result = df.copy()
+        result[new_name] = result[col]
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Duplicated '{col}' → '{new_name}'",
+        )
+
+    # ── 35. Forward fill nulls ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_fill_forward(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Forward-fill (ffill) null values only."""
+        col = params.get("column")
+        result = df.copy()
+
+        if col and col in result.columns:
+            before = int(result[col].isna().sum())
+            result[col] = result[col].ffill()
+            after = int(result[col].isna().sum())
+            filled = before - after
+            desc = f"Forward-filled '{col}': {filled} nulls filled"
+        else:
+            before = int(result.isna().sum().sum())
+            result = result.ffill()
+            after = int(result.isna().sum().sum())
+            filled = before - after
+            desc = f"Forward-filled all columns: {filled} nulls filled"
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=desc,
+        )
+
+    # ── 36. Interpolate missing values ──────────────────────────────────
+
+    @staticmethod
+    def handle_interpolate_values(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Interpolate missing numeric values using linear interpolation."""
+        col = params.get("column")
+        method = params.get("method", "linear")
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()
+
+        if not cols:
+            return HandlerResult(success=False, error="No numeric columns to interpolate")
+
+        before = int(result[cols].isna().sum().sum())
+        for c in cols:
+            result[c] = result[c].interpolate(method=method)
+        after = int(result[cols].isna().sum().sum())
+        filled = before - after
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Interpolated ({method}) {len(cols)} column(s): {filled} nulls filled",
+        )

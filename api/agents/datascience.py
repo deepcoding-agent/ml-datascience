@@ -82,7 +82,7 @@ def _build_response_text(
 
     # For codegen or mixed results, use LLM interpreter
     try:
-        interp_llm = get_llm(temperature=0.0, max_tokens=512, model_id=model_id)
+        interp_llm = get_llm(temperature=0.0, max_tokens=4096, model_id=model_id)
         return interpret_final_result(message, plan, exec_result, interp_llm)
     except Exception as e:
         log.error("Interpretation failed: %s", e)
@@ -120,18 +120,20 @@ def run_datascience_agent(
 
     # Step 4: AI planner — the sole decision-maker
     df_ctx = data_context(df, primary.name)
-    planner_llm = get_llm(temperature=0.0, max_tokens=1024, model_id=model_id)
+    planner_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
     plan = plan_steps(
         user_message=message,
         df_context=df_ctx,
         llm=planner_llm,
+        model_id=model_id,
+        history=history,
     )
 
     # Step 4b: Direct answer — planner decided this is NOT about the dataset
     if plan.get("direct_answer"):
         log.info("  planner → direct_answer (not about dataset)")
         from langchain_core.messages import SystemMessage
-        answer_llm = get_llm(temperature=0.3, max_tokens=1024, model_id=model_id)
+        answer_llm = get_llm(temperature=0.3, max_tokens=4096, model_id=model_id)
         msgs = (
             [SystemMessage(content=(
                 "You are a helpful AI assistant called PrepPilot. "
@@ -147,7 +149,7 @@ def run_datascience_agent(
         return direct_reply, {"output_type": "text", "should_activate": False}
 
     # Step 6: Execute each step (follows planner's handler/codegen decisions)
-    executor_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
+    executor_llm = get_llm(temperature=0.0, max_tokens=4096, model_id=model_id)
     exec_result = execute_plan(
         plan=plan,
         df=df,
