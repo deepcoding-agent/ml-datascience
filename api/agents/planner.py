@@ -172,17 +172,19 @@ Use codegen ONLY when NO handler in the table above can do it:
   - "query" → stats, viz, questions, any read-only operation
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
-### Smart chart selection — INTENT determines chart type
-Read the user's intent carefully, then pick the chart. Intent > column type.
-- "how many" / "count" / "frequency" / "number of each" → **viz.bar_chart** (shows counts clearly)
-- "percent" / "percentage" / "proportion" / "share" → **viz.pie_chart** (shows parts of whole)
-- "distribution" / "spread" / "histogram" → **viz.histogram** or **viz.distribution**
-- "compare" / "comparison" across categories → **viz.bar_chart**
-- "trend" / "over time" / time series → **viz.line_chart**
-- "relationship" / "vs" / "between" two columns → **viz.scatter**
-- "correlation" → **viz.heatmap** or **stats.correlation**
-- "outliers" / "spread by group" → **viz.box_plot**
-- Generic "plot" / "show" / "chart" with no clear intent → **viz.bar_chart** for categorical, **viz.histogram** for numeric
+### Chart selection — THINK before picking a chart
+When the user asks for a visualization, REASON about:
+1. **What question is the user asking?** — count, composition, distribution, relationship, trend, comparison?
+2. **What does the DATASET section say about the column?** — check dtype, unique count, is it numeric or categorical?
+3. **Pick the chart that BEST answers the question:**
+   - User wants to see counts/frequency of categories → bar_chart or count_plot
+   - User wants percentages/proportions/share (parts of whole) → pie_chart
+   - User wants to understand how numeric values are spread → histogram or distribution
+   - User wants to compare a numeric value across groups → box_plot or violin_plot
+   - User wants to see relationship between 2 numeric columns → scatter
+   - User wants to see trends over time/sequence → line_chart
+   - User wants a correlation overview → heatmap
+4. **Do NOT default to bar_chart or pie_chart blindly.** Read the user's actual intent word by word.
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
