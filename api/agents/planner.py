@@ -157,6 +157,21 @@ HANDLER_CATALOG = """\
 | nlp.language_detect | detect language per row from Unicode character ranges + pie chart | column? |
 | nlp.hash_vectorize | feature hashing — fast, memory-efficient text vectorization | column?, n? (features, default 32) |
 | nlp.text_encode | encode text as integer sequences (word→ID) for deep learning | column?, max_vocab? (default 5000), max_len? (default 100) |
+| nlp.keyword_extract | extract top-N keywords per document using TF-IDF scores | column?, n? (keywords per doc, default 5) |
+| nlp.char_features | character-level features: punct/digit/upper/lower/space ratios, avg word length | column? |
+| nlp.sentence_features | sentence-level stats: count, avg/min/max length, question/exclamation counts | column? |
+| nlp.readability_score | readability metrics: Flesch Reading Ease, Coleman-Liau, ARI | column? |
+| nlp.text_dedup | find/remove near-duplicate texts using TF-IDF cosine similarity | column?, threshold? (default 0.9), action? (flag/remove) |
+| nlp.emoji_features | extract emoji + emoticon count, ratio, and list per row | column? |
+| nlp.text_mask_pii | mask PII: emails, phones, credit cards, SSN, IPs, URLs → [EMAIL] etc. | column? |
+| nlp.text_augment | text augmentation: random word delete/swap to expand dataset | column?, n? (copies, default 1), strategy? (delete/swap/mixed) |
+| nlp.collocations | find significant word pair collocations ranked by PMI + chart (output_type=query) | column?, n? (default 20) |
+| nlp.word_cloud | word frequency treemap visualization (output_type=query) | column?, n? (words, default 40) |
+| nlp.text_filter | filter rows by text criteria: min/max length, contains, min words | column?, min_len?, max_len?, min_words?, contains?, not_contains? |
+| nlp.class_balance_text | analyze text label class balance + distribution chart (output_type=query) | column (label col), text_column? |
+| nlp.text_chunk | split long texts into fixed-size word chunks (new rows per chunk) | column?, chunk_size? (default 200), overlap? (default 20) |
+| nlp.spelling_features | OOV/spelling quality features: rare-word count and ratio per row | column? |
+| nlp.text_concat | combine multiple text columns into one corpus column | columns? (list), separator? (default " "), new_name? (default "text_combined") |
 """
 
 PLANNER_PROMPT = """\
@@ -213,9 +228,10 @@ When the user works with text/NLP data or asks to prepare text for ML:
    - High-cardinality text → nlp.hash_vectorize (memory-efficient)
    - Deep learning input → nlp.text_encode (integer sequences)
    - Capture phrases → nlp.ngrams (bigrams/trigrams)
-3. **Analysis** (read-only): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity → output_type="query"
-4. **Feature extraction**: nlp.sentiment_score, nlp.regex_extract, nlp.language_detect → output_type="generate"
-5. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
+3. **Analysis** (read-only, query): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity, nlp.collocations, nlp.word_cloud, nlp.class_balance_text
+4. **Feature extraction** (generate): nlp.sentiment_score, nlp.regex_extract, nlp.language_detect, nlp.char_features, nlp.sentence_features, nlp.readability_score, nlp.emoji_features, nlp.keyword_extract, nlp.spelling_features
+5. **Data prep**: nlp.text_dedup (remove duplicates), nlp.text_filter (remove short/empty), nlp.text_mask_pii (anonymize), nlp.text_chunk (split long docs), nlp.text_augment (expand small datasets), nlp.text_concat (merge text columns)
+6. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.

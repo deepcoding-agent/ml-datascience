@@ -143,6 +143,21 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("nlp", "language_detect"):      NlpHandler.handle_language_detect,
     ("nlp", "hash_vectorize"):       NlpHandler.handle_hash_vectorize,
     ("nlp", "text_encode"):          NlpHandler.handle_text_encode,
+    ("nlp", "keyword_extract"):      NlpHandler.handle_keyword_extract,
+    ("nlp", "char_features"):        NlpHandler.handle_char_features,
+    ("nlp", "sentence_features"):    NlpHandler.handle_sentence_features,
+    ("nlp", "readability_score"):    NlpHandler.handle_readability_score,
+    ("nlp", "text_dedup"):           NlpHandler.handle_text_dedup,
+    ("nlp", "emoji_features"):       NlpHandler.handle_emoji_features,
+    ("nlp", "text_mask_pii"):        NlpHandler.handle_text_mask_pii,
+    ("nlp", "text_augment"):         NlpHandler.handle_text_augment,
+    ("nlp", "collocations"):         NlpHandler.handle_collocations,
+    ("nlp", "word_cloud"):           NlpHandler.handle_word_cloud,
+    ("nlp", "text_filter"):          NlpHandler.handle_text_filter,
+    ("nlp", "class_balance_text"):   NlpHandler.handle_class_balance_text,
+    ("nlp", "text_chunk"):           NlpHandler.handle_text_chunk,
+    ("nlp", "spelling_features"):    NlpHandler.handle_spelling_features,
+    ("nlp", "text_concat"):          NlpHandler.handle_text_concat,
 }
 
 

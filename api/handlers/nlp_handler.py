@@ -1,4 +1,4 @@
-"""NLP / Text preprocessing handler — 15 handlers for text cleaning,
+"""NLP / Text preprocessing handler — 30 handlers for text cleaning,
 tokenization, vectorization, and NLP feature engineering."""
 from __future__ import annotations
 
@@ -734,4 +734,694 @@ class NlpHandler(BaseHandler):
                 f"(vocab={min(len(freq), max_vocab)+2}, max_len={max_len})"
             ),
             metadata={"vocab_size": min(len(freq), max_vocab) + 2, "max_len": max_len},
+        )
+
+    # ── 16. Keyword extraction (TF-IDF per document) ─────────────────────
+
+    @staticmethod
+    def handle_keyword_extract(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract top keywords per document using TF-IDF scores.
+        Creates {col}_keywords column with comma-separated top words."""
+        col = params.get("column")
+        n_keywords = int(params.get("n", 5))
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+
+            created: list[str] = []
+            for c in text_cols:
+                corpus = result[c].fillna("").astype(str)
+                vec = TfidfVectorizer(max_features=500, stop_words="english")
+                matrix = vec.fit_transform(corpus)
+                feature_names = vec.get_feature_names_out()
+
+                keywords: list[str] = []
+                for i in range(matrix.shape[0]):
+                    row = matrix[i].toarray().flatten()
+                    top_idx = row.argsort()[-n_keywords:][::-1]
+                    top_words = [feature_names[j] for j in top_idx if row[j] > 0]
+                    keywords.append(", ".join(top_words))
+
+                result[f"{c}_keywords"] = keywords
+                created.append(f"{c}_keywords")
+
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Extracted top-{n_keywords} keywords from {len(text_cols)} column(s)",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Keyword extraction error: {e}")
+
+    # ── 17. Character-level features ─────────────────────────────────────
+
+    @staticmethod
+    def handle_char_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract character-level features: punctuation count/ratio, digit ratio,
+        uppercase ratio, special char ratio, whitespace ratio, avg word length."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+            length = s.str.len().replace(0, 1)
+
+            result[f"{c}_char_count"] = s.str.len()
+            result[f"{c}_punct_count"] = s.str.count(r"[^\w\s]")
+            result[f"{c}_punct_ratio"] = (result[f"{c}_punct_count"] / length).round(4)
+            result[f"{c}_digit_ratio"] = (s.str.count(r"\d") / length).round(4)
+            result[f"{c}_upper_ratio"] = (s.str.count(r"[A-Z]") / length).round(4)
+            result[f"{c}_lower_ratio"] = (s.str.count(r"[a-z]") / length).round(4)
+            result[f"{c}_space_ratio"] = (s.str.count(r"\s") / length).round(4)
+            result[f"{c}_special_ratio"] = (s.str.count(r"[^a-zA-Z0-9\s]") / length).round(4)
+            # Average word length
+            words = s.str.findall(r"\b\w+\b")
+            result[f"{c}_avg_word_len"] = words.apply(
+                lambda ws: round(np.mean([len(w) for w in ws]), 2) if ws else 0.0
+            )
+            created.extend([
+                f"{c}_char_count", f"{c}_punct_count", f"{c}_punct_ratio",
+                f"{c}_digit_ratio", f"{c}_upper_ratio", f"{c}_lower_ratio",
+                f"{c}_space_ratio", f"{c}_special_ratio", f"{c}_avg_word_len",
+            ])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted {len(created)} character-level features from {len(text_cols)} column(s)",
+        )
+
+    # ── 18. Sentence-level features ──────────────────────────────────────
+
+    @staticmethod
+    def handle_sentence_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract sentence-level features: sentence count, avg/min/max sentence length,
+        question/exclamation counts."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+
+            def sent_stats(text: str) -> dict:
+                sents = [x.strip() for x in re.split(r"[.!?]+", text) if x.strip()]
+                n = len(sents)
+                lens = [len(x.split()) for x in sents] if sents else [0]
+                return {
+                    "count": n,
+                    "avg_len": round(np.mean(lens), 2),
+                    "max_len": max(lens),
+                    "min_len": min(lens),
+                }
+
+            stats = s.apply(sent_stats).apply(pd.Series)
+            result[f"{c}_sent_count"] = stats["count"].astype(int)
+            result[f"{c}_sent_avg_len"] = stats["avg_len"]
+            result[f"{c}_sent_max_len"] = stats["max_len"].astype(int)
+            result[f"{c}_sent_min_len"] = stats["min_len"].astype(int)
+            result[f"{c}_question_count"] = s.str.count(r"\?")
+            result[f"{c}_exclamation_count"] = s.str.count(r"!")
+
+            created.extend([
+                f"{c}_sent_count", f"{c}_sent_avg_len", f"{c}_sent_max_len",
+                f"{c}_sent_min_len", f"{c}_question_count", f"{c}_exclamation_count",
+            ])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted {len(created)} sentence features from {len(text_cols)} column(s)",
+        )
+
+    # ── 19. Readability score ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_readability_score(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Compute readability metrics: Flesch Reading Ease (approx),
+        Coleman-Liau Index, Automated Readability Index (ARI)."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        def _count_syllables(word: str) -> int:
+            """Approximate syllable count using vowel groups."""
+            word = word.lower().rstrip("e")
+            vowels = re.findall(r"[aeiouy]+", word)
+            return max(1, len(vowels))
+
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+
+            def readability(text: str) -> dict:
+                words_list = re.findall(r"\b\w+\b", text)
+                sents = [x for x in re.split(r"[.!?]+", text) if x.strip()]
+                n_words = max(len(words_list), 1)
+                n_sents = max(len(sents), 1)
+                n_chars = sum(len(w) for w in words_list)
+                n_syllables = sum(_count_syllables(w) for w in words_list)
+                # Flesch Reading Ease
+                fre = 206.835 - 1.015 * (n_words / n_sents) - 84.6 * (n_syllables / n_words)
+                # Coleman-Liau Index
+                L = (n_chars / n_words) * 100
+                S = (n_sents / n_words) * 100
+                cli = 0.0588 * L - 0.296 * S - 15.8
+                # Automated Readability Index
+                ari = 4.71 * (n_chars / n_words) + 0.5 * (n_words / n_sents) - 21.43
+                return {
+                    "flesch": round(max(0, min(fre, 120)), 1),
+                    "coleman_liau": round(cli, 1),
+                    "ari": round(ari, 1),
+                }
+
+            scores = s.apply(readability).apply(pd.Series)
+            result[f"{c}_flesch_score"] = scores["flesch"]
+            result[f"{c}_coleman_liau"] = scores["coleman_liau"]
+            result[f"{c}_ari_score"] = scores["ari"]
+            created.extend([f"{c}_flesch_score", f"{c}_coleman_liau", f"{c}_ari_score"])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Computed readability scores for {len(text_cols)} column(s): Flesch, Coleman-Liau, ARI",
+        )
+
+    # ── 20. Text deduplication ───────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_dedup(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Find and remove near-duplicate texts using TF-IDF cosine similarity.
+        Rows with similarity > threshold are flagged or removed."""
+        col = params.get("column")
+        threshold = float(params.get("threshold", 0.9))
+        action = params.get("action", "flag")  # flag | remove
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
+
+            target = text_cols[0]
+            result = df.copy()
+            corpus = result[target].fillna("").astype(str)
+            vec = TfidfVectorizer(max_features=200, stop_words="english")
+            matrix = vec.fit_transform(corpus)
+            sim = cosine_similarity(matrix)
+
+            # Find duplicates (keep first occurrence)
+            is_dup = np.zeros(len(result), dtype=bool)
+            dup_of: list[int] = [-1] * len(result)
+            for i in range(len(sim)):
+                if is_dup[i]:
+                    continue
+                for j in range(i + 1, len(sim)):
+                    if not is_dup[j] and sim[i][j] >= threshold:
+                        is_dup[j] = True
+                        dup_of[j] = i
+
+            n_dups = int(is_dup.sum())
+            result["_text_is_duplicate"] = is_dup
+            result["_text_duplicate_of"] = dup_of
+
+            if action == "remove" and n_dups > 0:
+                result = result[~result["_text_is_duplicate"]].drop(
+                    columns=["_text_is_duplicate", "_text_duplicate_of"],
+                ).reset_index(drop=True)
+                return HandlerResult(
+                    success=True, result_df=result, output_type="generate",
+                    summary=f"Removed {n_dups} near-duplicate texts (threshold={threshold}), {len(result)} rows remain",
+                )
+
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Flagged {n_dups} near-duplicate texts out of {len(result)} (threshold={threshold})",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Text dedup error: {e}")
+
+    # ── 21. Emoji / emoticon features ────────────────────────────────────
+
+    @staticmethod
+    def handle_emoji_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract emoji and emoticon features: count, ratio, list of emojis found.
+        Detects Unicode emojis and common text emoticons."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        # Unicode emoji pattern (covers most common emoji ranges)
+        emoji_pattern = re.compile(
+            "[\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"   # symbols & pictographs
+            "\U0001F680-\U0001F6FF"   # transport & map
+            "\U0001F1E0-\U0001F1FF"   # flags
+            "\U00002702-\U000027B0"   # dingbats
+            "\U000024C2-\U0001F251"   # misc
+            "\U0001F900-\U0001F9FF"   # supplemental
+            "\U0001FA00-\U0001FA6F"   # chess symbols
+            "\U0001FA70-\U0001FAFF"   # symbols extended
+            "]+", flags=re.UNICODE,
+        )
+        # Common text emoticons
+        emoticon_pattern = re.compile(
+            r"(?:[:;=][-']?[)(DPp/\\|Oo3><])|(?:[)(DPp><][-']?[:;=])|"
+            r"<3|</3|:'\(|:\)|;\)|:D|:P|:O|xD|XD|:-\)|:-\(|:\(|T_T|>_<|\^_\^"
+        )
+
+        created: list[str] = []
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+            # Emoji counts
+            result[f"{c}_emoji_count"] = s.apply(lambda t: len(emoji_pattern.findall(t)))
+            result[f"{c}_emoticon_count"] = s.apply(lambda t: len(emoticon_pattern.findall(t)))
+            result[f"{c}_emoji_total"] = result[f"{c}_emoji_count"] + result[f"{c}_emoticon_count"]
+            char_len = s.str.len().replace(0, 1)
+            result[f"{c}_emoji_ratio"] = (result[f"{c}_emoji_total"] / char_len).round(4)
+            # List emojis found
+            result[f"{c}_emojis_found"] = s.apply(
+                lambda t: ",".join(emoji_pattern.findall(t)[:10])
+            )
+            created.extend([
+                f"{c}_emoji_count", f"{c}_emoticon_count", f"{c}_emoji_total",
+                f"{c}_emoji_ratio", f"{c}_emojis_found",
+            ])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted {len(created)} emoji features from {len(text_cols)} column(s)",
+        )
+
+    # ── 22. PII masking / anonymization ──────────────────────────────────
+
+    @staticmethod
+    def handle_text_mask_pii(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Mask personally identifiable information: emails, phone numbers,
+        credit card numbers, SSN-like patterns, IP addresses."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        pii_patterns: list[tuple[str, str, str]] = [
+            ("email", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", "[EMAIL]"),
+            ("phone", r"\+?\d[\d\-\s()]{7,}\d", "[PHONE]"),
+            ("credit_card", r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b", "[CREDIT_CARD]"),
+            ("ssn", r"\b\d{3}[\s\-]?\d{2}[\s\-]?\d{4}\b", "[SSN]"),
+            ("ip_address", r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "[IP]"),
+            ("url", r"https?://[^\s<>\"']+|www\.[^\s<>\"']+", "[URL]"),
+        ]
+
+        total_masked = 0
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+            for pii_name, pattern, replacement in pii_patterns:
+                count_before = s.str.count(pattern).sum()
+                s = s.str.replace(pattern, replacement, regex=True)
+                total_masked += int(count_before)
+            result[c] = s
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Masked {total_masked} PII instances across {len(text_cols)} column(s): email, phone, credit card, SSN, IP, URL",
+        )
+
+    # ── 23. Text augmentation ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_augment(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Simple text augmentation: random word deletion, swap, and synonym-free duplication.
+        Creates augmented copies appended to the dataset. Useful for balancing NLP training sets."""
+        col = params.get("column")
+        n_aug = int(params.get("n", 1))  # number of augmented copies per row
+        strategy = params.get("strategy", "mixed")  # delete | swap | mixed
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        rng = np.random.RandomState(42)
+        target = text_cols[0]
+
+        def augment_one(text: str, method: str) -> str:
+            words = text.split()
+            if len(words) < 3:
+                return text
+            if method == "delete":
+                idx = rng.randint(0, len(words))
+                return " ".join(w for i, w in enumerate(words) if i != idx)
+            elif method == "swap":
+                i = rng.randint(0, max(len(words) - 1, 1))
+                j = min(i + 1, len(words) - 1)
+                words[i], words[j] = words[j], words[i]
+                return " ".join(words)
+            else:  # mixed
+                method = rng.choice(["delete", "swap"])
+                return augment_one(text, method)
+
+        result = df.copy()
+        aug_rows: list[pd.DataFrame] = []
+        for _ in range(n_aug):
+            aug = result.copy()
+            aug[target] = aug[target].fillna("").astype(str).apply(
+                lambda t: augment_one(t, strategy)
+            )
+            aug_rows.append(aug)
+
+        result = pd.concat([result] + aug_rows, ignore_index=True)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Augmented '{target}': {len(df)} → {len(result)} rows ({n_aug}x augmentation, strategy={strategy})",
+        )
+
+    # ── 24. Collocations (significant word pairs) ────────────────────────
+
+    @staticmethod
+    def handle_collocations(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Find significant word collocations (bigrams) using frequency and PMI.
+        Returns top-N collocations with scores + bar chart."""
+        col = params.get("column")
+        n = int(params.get("n", 20))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        corpus = df[target].fillna("").astype(str).str.lower()
+
+        # Collect bigrams and unigram counts
+        bigram_counts: Counter = Counter()
+        unigram_counts: Counter = Counter()
+        total_bigrams = 0
+
+        for text in corpus:
+            words = [w for w in re.findall(r"\b\w+\b", text) if w not in ENGLISH_STOPWORDS and len(w) > 1]
+            unigram_counts.update(words)
+            for i in range(len(words) - 1):
+                bigram_counts[(words[i], words[i + 1])] += 1
+                total_bigrams += 1
+
+        if total_bigrams == 0:
+            return HandlerResult(success=False, error="No collocations found — text may be too short")
+
+        total_unigrams = sum(unigram_counts.values())
+
+        # Compute PMI for top bigrams
+        rows: list[dict] = []
+        for (w1, w2), count in bigram_counts.most_common(n * 3):
+            if count < 2:
+                continue
+            p_bi = count / total_bigrams
+            p_w1 = unigram_counts[w1] / total_unigrams
+            p_w2 = unigram_counts[w2] / total_unigrams
+            pmi = np.log2(p_bi / max(p_w1 * p_w2, 1e-10))
+            rows.append({
+                "collocation": f"{w1} {w2}",
+                "frequency": count,
+                "pmi": round(pmi, 3),
+            })
+
+        rows.sort(key=lambda r: r["pmi"], reverse=True)
+        result_df = pd.DataFrame(rows[:n])
+
+        if not result_df.empty:
+            fig = px.bar(
+                result_df, x="pmi", y="collocation", orientation="h",
+                text="frequency",
+            )
+            fig.update_traces(marker_color="#2EC4B6", textposition="outside")
+            _style(fig, title=f"Top {n} Collocations — {target} (PMI-ranked)")
+            fig.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                xaxis_title="PMI Score", yaxis_title="Word Pair",
+            )
+            charts = [fig.to_json()]
+        else:
+            charts = []
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=charts,
+            summary=f"Found {len(result_df)} significant collocations in '{target}'",
+        )
+
+    # ── 25. Word cloud data + treemap visualization ──────────────────────
+
+    @staticmethod
+    def handle_word_cloud(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Generate word cloud data (word + weight) with Plotly treemap visualization."""
+        col = params.get("column")
+        n = int(params.get("n", 40))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        corpus = df[target].fillna("").astype(str).str.lower()
+        all_words: list[str] = []
+        for text in corpus:
+            words = [w for w in re.findall(r"\b\w+\b", text) if w not in ENGLISH_STOPWORDS and len(w) > 2]
+            all_words.extend(words)
+
+        freq = Counter(all_words).most_common(n)
+        if not freq:
+            return HandlerResult(success=False, error="No words found after filtering")
+
+        cloud_df = pd.DataFrame(freq, columns=["word", "weight"])
+        cloud_df["percentage"] = (cloud_df["weight"] / max(sum(c for _, c in freq), 1) * 100).round(2)
+
+        fig = px.treemap(
+            cloud_df, path=["word"], values="weight",
+            color="weight", color_continuous_scale="YlOrRd",
+        )
+        _style(fig, title=f"Word Cloud — {target} (top {n} words)")
+        fig.update_traces(textinfo="label+value")
+
+        return HandlerResult(
+            success=True, result_df=cloud_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Word cloud for '{target}': top {n} words from {len(all_words):,} total",
+        )
+
+    # ── 26. Text filter (by length, keyword, language) ───────────────────
+
+    @staticmethod
+    def handle_text_filter(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Filter rows by text criteria: min/max length, contains keyword,
+        min word count. Useful for cleaning out empty or too-short texts."""
+        col = params.get("column")
+        min_len = params.get("min_len")          # minimum character length
+        max_len = params.get("max_len")          # maximum character length
+        min_words = params.get("min_words")      # minimum word count
+        contains = params.get("contains")        # must contain keyword
+        not_contains = params.get("not_contains") # must not contain keyword
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        result = df.copy()
+        s = result[target].fillna("").astype(str)
+        original = len(result)
+        mask = pd.Series(True, index=result.index)
+
+        if min_len is not None:
+            mask &= s.str.len() >= int(min_len)
+        if max_len is not None:
+            mask &= s.str.len() <= int(max_len)
+        if min_words is not None:
+            mask &= s.str.split().str.len().fillna(0) >= int(min_words)
+        if contains is not None:
+            mask &= s.str.contains(str(contains), case=False, na=False)
+        if not_contains is not None:
+            mask &= ~s.str.contains(str(not_contains), case=False, na=False)
+
+        result = result[mask].reset_index(drop=True)
+        removed = original - len(result)
+
+        filters = []
+        if min_len is not None: filters.append(f"min_len={min_len}")
+        if max_len is not None: filters.append(f"max_len={max_len}")
+        if min_words is not None: filters.append(f"min_words={min_words}")
+        if contains is not None: filters.append(f"contains='{contains}'")
+        if not_contains is not None: filters.append(f"not_contains='{not_contains}'")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Filtered '{target}': {original} → {len(result)} rows (removed {removed}), filters: {', '.join(filters)}",
+        )
+
+    # ── 27. Text class balance check ─────────────────────────────────────
+
+    @staticmethod
+    def handle_class_balance_text(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze text label/category class balance with visualization.
+        Shows class distribution, imbalance ratio, and avg text length per class."""
+        col = params.get("column")
+        text_col = params.get("text_column")
+        if not col or col not in df.columns:
+            # Auto-detect: find low-cardinality string column
+            cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            candidates = [c for c in cat_cols if df[c].nunique() <= 50]
+            if not candidates:
+                return HandlerResult(success=False, error="No categorical/label column found. Specify column= param.")
+            col = candidates[0]
+
+        counts = df[col].value_counts()
+        imbalance_ratio = round(counts.max() / max(counts.min(), 1), 2)
+
+        rows: list[dict] = []
+        for label, count in counts.items():
+            row = {"label": str(label), "count": count, "percentage": round(count / len(df) * 100, 2)}
+            # If text column provided, compute avg length per class
+            if text_col and text_col in df.columns:
+                subset = df[df[col] == label][text_col].fillna("").astype(str)
+                row["avg_text_length"] = round(subset.str.len().mean(), 1)
+                row["avg_word_count"] = round(subset.str.split().str.len().mean(), 1)
+            rows.append(row)
+
+        result_df = pd.DataFrame(rows)
+
+        fig = px.bar(
+            result_df, x="label", y="count", color="label", text="count",
+        )
+        fig.update_traces(textposition="outside")
+        _style(fig, title=f"Class Balance — {col} (imbalance ratio: {imbalance_ratio}x, n={len(df)})")
+        fig.update_layout(xaxis_title="Class", yaxis_title="Count", showlegend=False)
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Class balance for '{col}': {len(counts)} classes, imbalance ratio={imbalance_ratio}x, majority='{counts.index[0]}' ({counts.iloc[0]})",
+        )
+
+    # ── 28. Text chunking ────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_chunk(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Split long texts into fixed-size chunks (by word count).
+        Creates new rows for each chunk — useful for processing long documents."""
+        col = params.get("column")
+        chunk_size = int(params.get("chunk_size", 200))  # words per chunk
+        overlap = int(params.get("overlap", 20))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        chunks: list[dict] = []
+
+        for idx, row in df.iterrows():
+            text = str(row.get(target, ""))
+            words = text.split()
+
+            if len(words) <= chunk_size:
+                chunk_row = row.to_dict()
+                chunk_row["_chunk_id"] = 0
+                chunk_row["_chunk_total"] = 1
+                chunks.append(chunk_row)
+            else:
+                step = max(chunk_size - overlap, 1)
+                total_chunks = max(1, (len(words) - overlap) // step + (1 if (len(words) - overlap) % step else 0))
+                for i, start in enumerate(range(0, len(words), step)):
+                    chunk_words = words[start : start + chunk_size]
+                    if not chunk_words:
+                        break
+                    chunk_row = row.to_dict()
+                    chunk_row[target] = " ".join(chunk_words)
+                    chunk_row["_chunk_id"] = i
+                    chunk_row["_chunk_total"] = total_chunks
+                    chunks.append(chunk_row)
+
+        result = pd.DataFrame(chunks).reset_index(drop=True)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Chunked '{target}': {len(df)} docs → {len(result)} chunks (size={chunk_size}, overlap={overlap})",
+        )
+
+    # ── 29. Spelling / OOV features ──────────────────────────────────────
+
+    @staticmethod
+    def handle_spelling_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Estimate out-of-vocabulary (OOV) word ratio as a proxy for spelling quality.
+        Builds a vocabulary from the corpus; words appearing only once are likely misspelled.
+        Creates oov_count and oov_ratio columns."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        created: list[str] = []
+        for c in text_cols:
+            corpus = result[c].fillna("").astype(str).str.lower()
+            # Build corpus vocabulary
+            all_words: list[str] = []
+            for text in corpus:
+                all_words.extend(re.findall(r"\b[a-zA-Z]+\b", text))
+
+            freq = Counter(all_words)
+            # Words appearing only once with length > 2 are likely misspelled
+            rare = {w for w, cnt in freq.items() if cnt == 1 and len(w) > 2}
+
+            def oov_stats(text: str) -> tuple[int, float]:
+                words = [w for w in re.findall(r"\b[a-zA-Z]+\b", text.lower()) if len(w) > 2]
+                if not words:
+                    return 0, 0.0
+                oov = sum(1 for w in words if w in rare)
+                return oov, round(oov / len(words), 4)
+
+            stats = corpus.apply(oov_stats)
+            result[f"{c}_oov_count"] = stats.apply(lambda x: x[0])
+            result[f"{c}_oov_ratio"] = stats.apply(lambda x: x[1])
+            created.extend([f"{c}_oov_count", f"{c}_oov_ratio"])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Computed OOV/spelling features for {len(text_cols)} column(s): {len(rare)} rare words detected",
+        )
+
+    # ── 30. Text column concatenation ────────────────────────────────────
+
+    @staticmethod
+    def handle_text_concat(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Combine multiple text columns into a single corpus column.
+        Useful before vectorization when text is split across multiple fields."""
+        columns = params.get("columns")
+        separator = params.get("separator", " ")
+        new_name = params.get("new_name", "text_combined")
+        result = df.copy()
+
+        if columns and isinstance(columns, list):
+            text_cols = [c for c in columns if c in result.columns]
+        else:
+            text_cols = result.select_dtypes(include="object").columns.tolist()
+
+        if len(text_cols) < 2:
+            return HandlerResult(
+                success=False,
+                error=f"Need at least 2 text columns to concatenate. Found: {text_cols}",
+            )
+
+        result[new_name] = result[text_cols].fillna("").astype(str).agg(separator.join, axis=1)
+        result[new_name] = result[new_name].str.strip()
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Concatenated {len(text_cols)} columns → '{new_name}': {', '.join(text_cols)}",
         )
