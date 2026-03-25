@@ -294,14 +294,14 @@ HANDLER_CATALOG = """\
 | nlp.ngrams | extract word n-gram features via TF-IDF | column?, n? (gram size, default 2), max_features? |
 | nlp.regex_extract | extract patterns: email/url/hashtag/mention/phone/number/custom | column?, pattern? (email/url/hashtag/mention/phone/number/all), regex? |
 | nlp.sentiment_score | lexicon-based sentiment scoring (positive/negative/compound) + chart | column? |
-| nlp.word_frequency | top-N word frequency analysis with bar chart (output_type=query) | column?, n? (default 20), remove_stopwords? |
+| nlp.word_frequency | ★ CORPUS-WIDE top-N most frequent words ACROSS ALL ROWS combined + bar chart (use for "top keywords in data", "most common words") | column?, n? (default 20), remove_stopwords? |
 | nlp.text_similarity | cosine similarity matrix using TF-IDF + heatmap (output_type=query) | column? |
 | nlp.vocab_stats | vocabulary statistics: unique tokens, TTR, avg word length, hapax (output_type=query) | column? |
 | nlp.text_normalize | normalize: strip accents + basic stemming + lowercase | column?, stem? (default true) |
 | nlp.language_detect | detect language per row from Unicode character ranges + pie chart | column? |
 | nlp.hash_vectorize | feature hashing — fast, memory-efficient text vectorization | column?, n? (features, default 32) |
 | nlp.text_encode | encode text as integer sequences (word→ID) for deep learning | column?, max_vocab? (default 5000), max_len? (default 100) |
-| nlp.keyword_extract | extract top-N keywords per document using TF-IDF scores | column?, n? (keywords per doc, default 5) |
+| nlp.keyword_extract | extract top-N keywords PER EACH ROW individually (NOT corpus-wide) using TF-IDF | column?, n? (keywords per doc, default 5) |
 | nlp.char_features | character-level features: punct/digit/upper/lower/space ratios, avg word length | column? |
 | nlp.sentence_features | sentence-level stats: count, avg/min/max length, question/exclamation counts | column? |
 | nlp.readability_score | readability metrics: Flesch Reading Ease, Coleman-Liau, ARI | column? |
@@ -470,6 +470,11 @@ When the user works with text/NLP data or asks to prepare text for ML:
    - Capture phrases → nlp.ngrams (bigrams/trigrams)
 3. **Analysis** (read-only, query): nlp.word_frequency, nlp.vocab_stats, nlp.text_similarity, nlp.collocations, nlp.word_cloud, nlp.class_balance_text
 4. **Feature extraction** (generate): nlp.sentiment_score, nlp.regex_extract, nlp.language_detect, nlp.char_features, nlp.sentence_features, nlp.readability_score, nlp.emoji_features, nlp.keyword_extract, nlp.spelling_features
+5. **IMPORTANT — keyword/word frequency distinction**:
+   - "top keywords across all rows" / "คำที่เยอะที่สุดรวมทุก rows" → **nlp.word_frequency** (corpus-wide aggregate)
+   - "keywords per each row" / "keyword ของแต่ละ row" → nlp.keyword_extract (per-document)
+   - "word cloud" / "show common words" → nlp.word_cloud (corpus-wide treemap)
+   - If user says "รวมทุก rows" or "across all" or "ทั้งหมด" → ALWAYS use nlp.word_frequency, NOT keyword_extract
 5. **Data prep**: nlp.text_dedup (remove duplicates), nlp.text_filter (remove short/empty), nlp.text_mask_pii (anonymize), nlp.text_chunk (split long docs), nlp.text_augment (expand small datasets), nlp.text_concat (merge text columns)
 6. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
 
