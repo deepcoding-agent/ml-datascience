@@ -1,4 +1,4 @@
-"""Transform handler — 41 handlers: filter, sort, groupby, assign, encode, scale, pivot, melt, rank, rolling, merge, resample, etc."""
+"""Transform handler — 50 handlers: filter, sort, groupby, assign, encode, scale, pivot, melt, rank, rolling, merge, resample, etc."""
 from __future__ import annotations
 
 import numpy as np
@@ -801,4 +801,218 @@ class TransformHandler(BaseHandler):
         return HandlerResult(
             success=True, result_df=result, output_type="generate",
             summary=f"Cross join: {len(vals1)} × {len(vals2)} = {len(result)} combinations",
+        )
+
+    # ── 28. Ordinal encoding with custom order ──────────────────────────
+
+    @staticmethod
+    def handle_encode_ordinal(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Ordinal-encode a categorical column using a custom order list.
+        If no order is given, sorts unique values alphabetically."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        order = params.get("order")  # list of strings
+        result = df.copy()
+
+        if order and isinstance(order, list):
+            mapping = {v: i for i, v in enumerate(order)}
+        else:
+            uniques = sorted(result[col].dropna().unique(), key=str)
+            mapping = {v: i for i, v in enumerate(uniques)}
+
+        result[f"{col}_ordinal"] = result[col].map(mapping)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Ordinal-encoded '{col}' → '{col}_ordinal' ({len(mapping)} levels)",
+        )
+
+    # ── 29. Shift column values ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_shift_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Shift column values up or down by N rows (like lag/lead)."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        periods = int(params.get("periods", 1))
+        result = df.copy()
+        result[f"{col}_shift_{periods}"] = result[col].shift(periods)
+        direction = "down" if periods > 0 else "up"
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Shifted '{col}' {direction} by {abs(periods)} rows → '{col}_shift_{periods}'",
+        )
+
+    # ── 30. Winsorize ───────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_winsorize(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Cap extreme values at percentile bounds (e.g. 5th/95th)."""
+        col = params.get("column")
+        lower = float(params.get("lower", 0.05))
+        upper = float(params.get("upper", 0.95))
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()
+
+        for c in cols:
+            lo = result[c].quantile(lower)
+            hi = result[c].quantile(upper)
+            result[c] = result[c].clip(lower=lo, upper=hi)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Winsorized {len(cols)} column(s) at [{lower*100:.0f}th, {upper*100:.0f}th] percentile",
+        )
+
+    # ── 31. Stack columns to long format ────────────────────────────────
+
+    @staticmethod
+    def handle_stack_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Stack selected columns into long format with col_name and col_value."""
+        columns = params.get("columns", [])
+        if not columns or not isinstance(columns, list):
+            columns = df.columns.tolist()
+
+        valid = [c for c in columns if c in df.columns]
+        if not valid:
+            return HandlerResult(success=False, error="No valid columns to stack")
+
+        id_cols = [c for c in df.columns if c not in valid]
+        result = df.melt(id_vars=id_cols if id_cols else None,
+                         value_vars=valid,
+                         var_name="col_name", value_name="col_value")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Stacked {len(valid)} columns → long format ({len(result):,} rows)",
+        )
+
+    # ── 32. Unstack column to wide format ───────────────────────────────
+
+    @staticmethod
+    def handle_unstack_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Unstack/pivot a column to wide format. Requires index, column, and value cols."""
+        index_col = params.get("index")
+        col_col = params.get("column")
+        value_col = params.get("value")
+
+        if not col_col or col_col not in df.columns:
+            return HandlerResult(success=False, error="Specify column= for the column to unstack")
+
+        if not index_col:
+            candidates = [c for c in df.columns if c != col_col and c != value_col]
+            index_col = candidates[0] if candidates else None
+        if not value_col:
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            value_col = num_cols[0] if num_cols else None
+
+        if index_col is None or value_col is None:
+            return HandlerResult(success=False, error="Need index, column, and value params")
+
+        try:
+            result = df.pivot_table(index=index_col, columns=col_col,
+                                     values=value_col, aggfunc="first").reset_index()
+            result.columns = [str(c) for c in result.columns]
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Unstacked '{col_col}' → {len(result.columns)-1} new columns, {len(result)} rows",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Unstack error: {e}")
+
+    # ── 33. Reorder columns ─────────────────────────────────────────────
+
+    @staticmethod
+    def handle_reorder_columns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Reorder columns alphabetically or by a provided list."""
+        order = params.get("order")  # list of column names
+        result = df.copy()
+
+        if order and isinstance(order, list):
+            valid = [c for c in order if c in result.columns]
+            remaining = [c for c in result.columns if c not in valid]
+            result = result[valid + remaining]
+            desc = f"custom order ({len(valid)} specified)"
+        else:
+            result = result.reindex(sorted(result.columns), axis=1)
+            desc = "alphabetical"
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Reordered {len(result.columns)} columns ({desc})",
+        )
+
+    # ── 34. Duplicate column ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_duplicate_column(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Duplicate a column with a new name."""
+        col, err = BaseHandler.require_column(df, params.get("column"), params.get("column", ""))
+        if err:
+            return err
+        new_name = params.get("new_name", f"{col}_copy")
+        result = df.copy()
+        result[new_name] = result[col]
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Duplicated '{col}' → '{new_name}'",
+        )
+
+    # ── 35. Forward fill nulls ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_fill_forward(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Forward-fill (ffill) null values only."""
+        col = params.get("column")
+        result = df.copy()
+
+        if col and col in result.columns:
+            before = int(result[col].isna().sum())
+            result[col] = result[col].ffill()
+            after = int(result[col].isna().sum())
+            filled = before - after
+            desc = f"Forward-filled '{col}': {filled} nulls filled"
+        else:
+            before = int(result.isna().sum().sum())
+            result = result.ffill()
+            after = int(result.isna().sum().sum())
+            filled = before - after
+            desc = f"Forward-filled all columns: {filled} nulls filled"
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=desc,
+        )
+
+    # ── 36. Interpolate missing values ──────────────────────────────────
+
+    @staticmethod
+    def handle_interpolate_values(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Interpolate missing numeric values using linear interpolation."""
+        col = params.get("column")
+        method = params.get("method", "linear")
+        result = df.copy()
+
+        if col and col in result.columns:
+            cols = [col]
+        else:
+            cols = result.select_dtypes(include="number").columns.tolist()
+
+        if not cols:
+            return HandlerResult(success=False, error="No numeric columns to interpolate")
+
+        before = int(result[cols].isna().sum().sum())
+        for c in cols:
+            result[c] = result[c].interpolate(method=method)
+        after = int(result[cols].isna().sum().sum())
+        filled = before - after
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Interpolated ({method}) {len(cols)} column(s): {filled} nulls filled",
         )

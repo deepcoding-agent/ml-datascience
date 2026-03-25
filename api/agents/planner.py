@@ -168,6 +168,15 @@ HANDLER_CATALOG = """\
 | transform.flatten_columns | flatten multi-level columns to snake_case | (none) |
 | transform.resample | resample time series to different frequency (D/W/M/Q/Y) | column? (date col), freq? (default M), agg? (mean/sum) |
 | transform.cross_join | cartesian product of unique values from two columns | columns (list of 2) |
+| transform.encode_ordinal | ordinal encode with custom order list (or alphabetical) | column, order? (list) |
+| transform.shift_column | shift column values up/down by N rows (lag/lead) | column, periods? (default 1) |
+| transform.winsorize | cap extreme values at percentile bounds | column?, lower? (default 0.05), upper? (default 0.95) |
+| transform.stack_columns | stack selected columns into long format (col_name, col_value) | columns? (list) |
+| transform.unstack_column | unstack/pivot a column to wide format | index?, column, value? |
+| transform.reorder_columns | reorder columns alphabetically or by list | order? (list of col names) |
+| transform.duplicate_column | duplicate a column with a new name | column, new_name? |
+| transform.fill_forward | forward-fill (ffill) nulls only | column? |
+| transform.interpolate_values | interpolate missing numeric values (linear/etc) | column?, method? (default linear) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
@@ -322,6 +331,11 @@ HANDLER_CATALOG = """\
 | nlp.text_count_pattern | count occurrences of a pattern per row, optionally filter | column?, pattern, filter? (bool) |
 | nlp.text_summary_report | comprehensive text dataset report: stats, quality, recommendations (output_type=query) | column? |
 | nlp.text_stratified_sample | stratified random sample maintaining label distribution | column? (label col), n? (default 100) |
+| nlp.text_ngram_frequency | word n-gram frequency analysis with bar chart (output_type=query) | column?, n? (gram size, default 2), top? (default 20) |
+| nlp.text_extract_numbers | extract all numbers from text into a new column | column? |
+| nlp.text_remove_rare | remove words appearing below frequency threshold | column?, min_freq? (default 2) |
+| nlp.text_pos_patterns | detect POS-like surface patterns: all_caps/capitalized/numeric ratios | column? |
+| nlp.text_diversity_index | Simpson diversity index of words per document | column? |
 
 ### Analysis (smart, high-level — use for complex questions, comparisons, insights)
 | id | what it does | params |
