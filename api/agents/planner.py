@@ -350,6 +350,26 @@ HANDLER_CATALOG = """\
 | analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
 | analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
 | analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
+| analysis.cluster_kmeans | K-Means clustering with auto k selection (silhouette) + 2D scatter | max_k? (default 8) |
+| analysis.pca_2d | PCA 2D projection with explained variance + scatter | (none) |
+| analysis.outlier_isolation_forest | Isolation Forest anomaly detection + scatter | contamination? (default 0.05) |
+| analysis.feature_selection_auto | automatic feature selection (variance + correlation + mutual info) | column? (target) |
+| analysis.distribution_analysis | distribution shape analysis (skew, kurtosis, normality) per numeric col | (none) |
+| analysis.missing_value_analysis | deep missing value pattern analysis (co-occurrence, MCAR hint) | (none) |
+| analysis.categorical_analysis | deep analysis of all categorical columns (cardinality, mode, entropy) | (none) |
+| analysis.numeric_summary | comprehensive numeric columns summary in one table | (none) |
+| analysis.hypothesis_test | auto choose t-test/Mann-Whitney based on normality | column? (numeric), group_column? (categorical) |
+| analysis.regression_quick | quick OLS linear regression + scatter + R-squared + coefficients | column? (target), feature? |
+| analysis.top_n_analysis | analyze top N rows by a metric with details | column?, n? (default 10) |
+| analysis.bottom_n_analysis | analyze bottom N rows by a metric | column?, n? (default 10) |
+| analysis.percentile_analysis | compare stats across percentile bands (Q1-Q4) | column? |
+| analysis.variance_analysis | variance contribution per feature (% of total variance) | (none) |
+| analysis.change_point_detect | detect change points in numeric series (sliding window mean diff) | column?, window? (default 10) |
+| analysis.target_analysis | analyze relationship between each feature and a target column | column? (target) |
+| analysis.multicollinearity_check | VIF-based multicollinearity detection | (none) |
+| analysis.ab_test | A/B test with significance (p-value, effect size, confidence interval) | column? (metric), group_column? |
+| analysis.pareto_analysis | Pareto 80/20 rule analysis on a column | column? |
+| analysis.data_completeness | data completeness scorecard per column + overall score | (none) |
 """
 
 PLANNER_PROMPT = """\

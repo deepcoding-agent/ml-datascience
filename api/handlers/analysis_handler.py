@@ -1,4 +1,4 @@
-"""Analysis handler — 10 smart, high-level analytical handlers.
+"""Analysis handler — 50 smart, high-level analytical handlers.
 
 These go beyond single-column stats: they reason about the data,
 combine multiple operations, and return rich, insight-driven results
@@ -6,6 +6,7 @@ with charts and formatted summaries.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 
@@ -725,4 +726,875 @@ class AnalysisHandler(BaseHandler):
             success=True, result_df=result_df, output_type="query",
             charts_plotly=charts,
             summary=summary,
+        )
+
+    # ── 11. K-Means clustering ───────────────────────────────────────────
+
+    @staticmethod
+    def handle_cluster_kmeans(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """K-Means clustering with auto k selection (silhouette) + 2D scatter."""
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+        from sklearn.preprocessing import StandardScaler
+
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need at least 2 numeric columns for clustering")
+
+        cols = num_cols[:10]
+        X = df[cols].dropna()
+        if len(X) < 10:
+            return HandlerResult(success=False, error="Need at least 10 non-null rows for clustering")
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        max_k = min(int(params.get("max_k", 8)), len(X) - 1, 10)
+        min_k = 2
+        best_k, best_score = 2, -1.0
+        scores: list[dict] = []
+        for k in range(min_k, max_k + 1):
+            km = KMeans(n_clusters=k, n_init=10, random_state=42, max_iter=300)
+            labels = km.fit_predict(X_scaled)
+            s = silhouette_score(X_scaled, labels)
+            scores.append({"k": k, "silhouette": round(s, 4)})
+            if s > best_score:
+                best_k, best_score = k, s
+
+        km = KMeans(n_clusters=best_k, n_init=10, random_state=42, max_iter=300)
+        labels = km.fit_predict(X_scaled)
+        X = X.copy()
+        X["cluster"] = labels
+
+        fig = px.scatter(
+            X, x=cols[0], y=cols[1], color="cluster",
+            color_continuous_scale="Viridis",
+        )
+        fig.update_traces(marker_size=5)
+        _style(fig, title=f"K-Means Clustering (k={best_k}, silhouette={best_score:.3f})")
+
+        result_df = pd.DataFrame(scores)
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"K-Means: best k={best_k} (silhouette={best_score:.3f}) on {len(X)} rows, {len(cols)} features",
+        )
+
+    # ── 12. PCA 2D projection ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_pca_2d(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """PCA 2D projection with explained variance + scatter plot."""
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need at least 2 numeric columns for PCA")
+
+        cols = num_cols[:20]
+        X = df[cols].dropna()
+        if len(X) < 5:
+            return HandlerResult(success=False, error="Need at least 5 non-null rows")
+
+        X_scaled = StandardScaler().fit_transform(X)
+        pca = PCA(n_components=2, random_state=42)
+        coords = pca.fit_transform(X_scaled)
+
+        pca_df = pd.DataFrame({"PC1": coords[:, 0], "PC2": coords[:, 1]})
+        var = pca.explained_variance_ratio_
+
+        fig = px.scatter(pca_df, x="PC1", y="PC2", opacity=0.5)
+        fig.update_traces(marker_color="#FB8C3C", marker_size=4)
+        _style(fig, title=f"PCA 2D — Var explained: PC1={var[0]:.1%}, PC2={var[1]:.1%} (total={sum(var):.1%})")
+
+        result_df = pd.DataFrame({
+            "component": ["PC1", "PC2"],
+            "explained_variance_ratio": [round(float(v), 4) for v in var],
+            "cumulative": [round(float(var[0]), 4), round(float(sum(var)), 4)],
+        })
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"PCA 2D on {len(cols)} features: {sum(var):.1%} variance explained",
+        )
+
+    # ── 13. Isolation Forest anomaly detection ───────────────────────────
+
+    @staticmethod
+    def handle_outlier_isolation_forest(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Isolation Forest anomaly detection + scatter visualization."""
+        from sklearn.ensemble import IsolationForest
+        from sklearn.preprocessing import StandardScaler
+
+        contamination = float(params.get("contamination", 0.05))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need at least 2 numeric columns")
+
+        cols = num_cols[:10]
+        X = df[cols].dropna()
+        if len(X) < 10:
+            return HandlerResult(success=False, error="Need at least 10 non-null rows")
+
+        X_scaled = StandardScaler().fit_transform(X)
+        iso = IsolationForest(contamination=contamination, random_state=42, n_estimators=100)
+        preds = iso.fit_predict(X_scaled)
+
+        X_out = X.copy()
+        X_out["anomaly"] = ["Anomaly" if p == -1 else "Normal" for p in preds]
+        n_anomalies = int((preds == -1).sum())
+
+        fig = px.scatter(
+            X_out, x=cols[0], y=cols[1], color="anomaly",
+            color_discrete_map={"Anomaly": "#E71D36", "Normal": "#86868B"},
+        )
+        fig.update_traces(marker_size=4)
+        _style(fig, title=f"Isolation Forest — {n_anomalies} anomalies ({n_anomalies/len(X)*100:.1f}%)")
+
+        result_df = pd.DataFrame({"label": ["Normal", "Anomaly"], "count": [len(X) - n_anomalies, n_anomalies]})
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Isolation Forest found {n_anomalies} anomalies ({n_anomalies/len(X)*100:.1f}%) in {len(X)} rows",
+        )
+
+    # ── 14. Automatic feature selection ──────────────────────────────────
+
+    @staticmethod
+    def handle_feature_selection_auto(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Auto feature selection: variance filter + correlation filter + mutual info."""
+        from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+        from sklearn.preprocessing import LabelEncoder
+
+        target_col = params.get("column") or params.get("target")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need at least 2 numeric columns")
+
+        if not target_col or target_col not in df.columns:
+            target_col = num_cols[-1]
+
+        feature_cols = [c for c in num_cols if c != target_col]
+        clean = df[feature_cols + [target_col]].dropna()
+        if len(clean) < 10:
+            return HandlerResult(success=False, error="Need at least 10 non-null rows")
+
+        X = clean[feature_cols]
+        y = clean[target_col]
+
+        rows: list[dict] = []
+        for c in feature_cols:
+            var = float(X[c].var())
+            corr_val = float(X[c].corr(y)) if pd.api.types.is_numeric_dtype(y) else 0.0
+            rows.append({"feature": c, "variance": round(var, 4), "abs_corr_target": round(abs(corr_val), 4)})
+
+        try:
+            if y.nunique() <= 20:
+                le = LabelEncoder()
+                y_enc = le.fit_transform(y.astype(str))
+                mi = mutual_info_classif(X, y_enc, random_state=42)
+            else:
+                mi = mutual_info_regression(X, y, random_state=42)
+            for i, c in enumerate(feature_cols):
+                rows[i]["mutual_info"] = round(float(mi[i]), 4)
+        except Exception:
+            for r in rows:
+                r["mutual_info"] = 0.0
+
+        result_df = pd.DataFrame(rows).sort_values("mutual_info", ascending=False)
+        result_df["rank"] = range(1, len(result_df) + 1)
+
+        fig = px.bar(
+            result_df.head(15), x="mutual_info", y="feature", orientation="h",
+            text="mutual_info", color="abs_corr_target", color_continuous_scale="YlOrRd",
+        )
+        fig.update_traces(texttemplate="%{text:.3f}", textposition="outside")
+        _style(fig, title=f"Feature Importance (target={target_col})")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Ranked {len(feature_cols)} features by importance for '{target_col}'. Top: {result_df.iloc[0]['feature']}",
+        )
+
+    # ── 15. Distribution analysis ────────────────────────────────────────
+
+    @staticmethod
+    def handle_distribution_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze distribution shape (skew, kurtosis, normality) per numeric column."""
+        from scipy import stats as sp_stats
+
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns found")
+
+        rows: list[dict] = []
+        for c in num_cols:
+            s = df[c].dropna()
+            if len(s) < 8:
+                continue
+            sk = float(s.skew())
+            ku = float(s.kurt())
+            try:
+                _, p_shapiro = sp_stats.shapiro(s.sample(min(len(s), 5000), random_state=42))
+            except Exception:
+                p_shapiro = 0.0
+
+            shape = "Normal" if abs(sk) < 0.5 and abs(ku) < 1 else "Skewed" if abs(sk) > 1 else "Heavy-tailed" if ku > 3 else "Moderate"
+            rows.append({
+                "column": c, "skewness": round(sk, 3), "kurtosis": round(ku, 3),
+                "shapiro_p": round(float(p_shapiro), 4), "normal": p_shapiro > 0.05, "shape": shape,
+            })
+
+        if not rows:
+            return HandlerResult(success=False, error="No columns with enough data for distribution analysis")
+
+        result_df = pd.DataFrame(rows)
+        non_normal = result_df[~result_df["normal"]]
+
+        fig = px.bar(result_df, x="column", y="skewness", color="shape", text="skewness")
+        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        _style(fig, title=f"Distribution Shape — {len(result_df)} numeric columns")
+
+        most_skewed = result_df.loc[result_df["skewness"].abs().idxmax(), "column"]
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"{len(non_normal)}/{len(result_df)} columns are non-normal (Shapiro p<0.05). Most skewed: {most_skewed}",
+        )
+
+    # ── 16. Missing value analysis ───────────────────────────────────────
+
+    @staticmethod
+    def handle_missing_value_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Deep missing value pattern analysis: co-occurrence, MCAR hint, heatmap."""
+        null_counts = df.isnull().sum()
+        null_cols = null_counts[null_counts > 0]
+        if len(null_cols) == 0:
+            return HandlerResult(
+                success=True, result_df=pd.DataFrame({"status": ["No missing values"]}),
+                output_type="query", summary="No missing values found in any column.",
+            )
+
+        rows: list[dict] = []
+        for c in null_cols.index:
+            n_miss = int(null_cols[c])
+            pct = round(n_miss / len(df) * 100, 2)
+            pattern = "Random" if pct < 5 else "Moderate" if pct < 30 else "Systematic"
+            rows.append({"column": c, "missing": n_miss, "pct": pct, "pattern": pattern})
+
+        result_df = pd.DataFrame(rows).sort_values("pct", ascending=False)
+
+        # Co-occurrence: which columns tend to be missing together
+        co_occ: list[str] = []
+        null_matrix = df[null_cols.index].isnull()
+        if len(null_cols) >= 2:
+            corr_null = null_matrix.corr()
+            for i, c1 in enumerate(null_cols.index):
+                for j, c2 in enumerate(null_cols.index):
+                    if i < j and corr_null.loc[c1, c2] > 0.5:
+                        co_occ.append(f"{c1} & {c2} (r={corr_null.loc[c1, c2]:.2f})")
+
+        total_null = int(df.isnull().sum().sum())
+        total_cells = len(df) * len(df.columns)
+
+        fig = px.bar(result_df, x="pct", y="column", orientation="h", color="pattern",
+                     text="pct", color_discrete_map={"Random": "#2EC4B6", "Moderate": "#FF9F1C", "Systematic": "#E71D36"})
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        _style(fig, title=f"Missing Value Analysis — {len(null_cols)} columns, {total_null:,} cells")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        summary = f"{len(null_cols)} columns with missing values ({total_null:,}/{total_cells:,} cells = {total_null/total_cells*100:.1f}%)."
+        if co_occ:
+            summary += f" Co-occurring: {', '.join(co_occ[:3])}."
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()], summary=summary,
+        )
+
+    # ── 17. Categorical analysis ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_categorical_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Deep analysis of all categorical columns: cardinality, mode, entropy."""
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if not cat_cols:
+            return HandlerResult(success=False, error="No categorical columns found")
+
+        rows: list[dict] = []
+        for c in cat_cols:
+            s = df[c].dropna()
+            n_unique = int(s.nunique())
+            mode_val = str(s.mode().iloc[0]) if len(s) > 0 else "N/A"
+            mode_freq = int(s.value_counts().iloc[0]) if len(s) > 0 else 0
+            mode_pct = round(mode_freq / max(len(s), 1) * 100, 1)
+
+            probs = s.value_counts(normalize=True)
+            entropy = round(float(-(probs * np.log2(probs.clip(lower=1e-10))).sum()), 3)
+
+            card_type = "Binary" if n_unique == 2 else "Low" if n_unique <= 10 else "Medium" if n_unique <= 50 else "High"
+            rows.append({
+                "column": c, "unique": n_unique, "cardinality": card_type,
+                "mode": mode_val, "mode_pct": mode_pct, "entropy": entropy,
+                "null_pct": round(df[c].isnull().sum() / len(df) * 100, 1),
+            })
+
+        result_df = pd.DataFrame(rows)
+
+        fig = px.bar(result_df, x="unique", y="column", orientation="h",
+                     color="cardinality", text="unique",
+                     color_discrete_map={"Binary": "#2EC4B6", "Low": "#FB8C3C", "Medium": "#FF9F1C", "High": "#E71D36"})
+        fig.update_traces(textposition="outside")
+        _style(fig, title=f"Categorical Column Analysis — {len(cat_cols)} columns")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        highest_card = result_df.loc[result_df["unique"].idxmax()]
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Analyzed {len(cat_cols)} categorical columns. Highest cardinality: {highest_card['column']} ({highest_card['unique']} unique)",
+        )
+
+    # ── 18. Numeric summary ──────────────────────────────────────────────
+
+    @staticmethod
+    def handle_numeric_summary(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Comprehensive numeric columns summary in one table."""
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns found")
+
+        rows: list[dict] = []
+        for c in num_cols:
+            s = df[c].dropna()
+            rows.append({
+                "column": c, "count": len(s),
+                "null_pct": round(df[c].isnull().sum() / len(df) * 100, 1),
+                "mean": round(float(s.mean()), 3), "std": round(float(s.std()), 3),
+                "min": round(float(s.min()), 3), "p25": round(float(s.quantile(0.25)), 3),
+                "median": round(float(s.median()), 3), "p75": round(float(s.quantile(0.75)), 3),
+                "max": round(float(s.max()), 3), "skew": round(float(s.skew()), 3),
+                "kurtosis": round(float(s.kurt()), 3),
+                "zeros": int((s == 0).sum()), "negatives": int((s < 0).sum()),
+            })
+
+        result_df = pd.DataFrame(rows)
+
+        heat_cols = ["mean", "std", "skew", "kurtosis"]
+        heat_data = result_df.set_index("column")[heat_cols]
+        fig = px.imshow(heat_data.T, text_auto=".2f", aspect="auto", color_continuous_scale="YlOrRd")
+        _style(fig, title=f"Numeric Summary Heatmap — {len(num_cols)} columns")
+
+        n_with_nulls = sum(1 for r in rows if r["null_pct"] > 0)
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Summarized {len(num_cols)} numeric columns. {n_with_nulls} have nulls.",
+        )
+
+    # ── 19. Hypothesis test (auto) ───────────────────────────────────────
+
+    @staticmethod
+    def handle_hypothesis_test(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Auto-choose t-test or Mann-Whitney based on normality."""
+        from scipy import stats as sp_stats
+
+        col = params.get("column")
+        group_col = params.get("group_column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        if not col or col not in num_cols:
+            col = num_cols[0] if num_cols else None
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+
+        if not group_col or group_col not in cat_cols:
+            for c in cat_cols:
+                if df[c].nunique() == 2:
+                    group_col = c
+                    break
+            if not group_col:
+                group_col = cat_cols[0] if cat_cols else None
+        if group_col is None:
+            return HandlerResult(success=False, error="No categorical column found for grouping")
+
+        groups = df[group_col].dropna().unique()[:2]
+        if len(groups) < 2:
+            return HandlerResult(success=False, error=f"Need at least 2 groups in '{group_col}', found {len(groups)}")
+
+        g1 = df[df[group_col] == groups[0]][col].dropna()
+        g2 = df[df[group_col] == groups[1]][col].dropna()
+
+        normal_1 = sp_stats.shapiro(g1.sample(min(len(g1), 5000), random_state=42))[1] > 0.05 if len(g1) >= 8 else False
+        normal_2 = sp_stats.shapiro(g2.sample(min(len(g2), 5000), random_state=42))[1] > 0.05 if len(g2) >= 8 else False
+
+        if normal_1 and normal_2:
+            stat, p = sp_stats.ttest_ind(g1, g2)
+            test_name = "Independent t-test"
+        else:
+            stat, p = sp_stats.mannwhitneyu(g1, g2, alternative="two-sided")
+            test_name = "Mann-Whitney U"
+
+        effect_size = abs(g1.mean() - g2.mean()) / max(float(pd.concat([g1, g2]).std()), 1e-10)
+        sig = "Significant" if p < 0.05 else "Not significant"
+
+        result_df = pd.DataFrame({
+            "metric": ["test", "statistic", "p_value", "significant", "effect_size_d",
+                       f"mean_{groups[0]}", f"mean_{groups[1]}", "n_group_1", "n_group_2"],
+            "value": [test_name, round(float(stat), 4), round(float(p), 6), sig,
+                      round(float(effect_size), 3), round(float(g1.mean()), 3),
+                      round(float(g2.mean()), 3), len(g1), len(g2)],
+        })
+
+        fig = px.box(df[df[group_col].isin(groups)], x=group_col, y=col, color=group_col)
+        _style(fig, title=f"{test_name}: {col} by {group_col} (p={float(p):.4f}, {sig})")
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"{test_name}: {sig} (p={float(p):.4f}). {groups[0]} mean={g1.mean():.3f} vs {groups[1]} mean={g2.mean():.3f}, Cohen's d={effect_size:.3f}",
+        )
+
+    # ── 20. Quick OLS regression ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_regression_quick(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Quick OLS linear regression + scatter + R-squared + coefficients."""
+        from sklearn.linear_model import LinearRegression
+
+        target = params.get("column") or params.get("target")
+        feature = params.get("feature")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not target or target not in num_cols:
+            target = num_cols[-1] if num_cols else None
+        if target is None:
+            return HandlerResult(success=False, error="No numeric target column found")
+
+        features = [c for c in num_cols if c != target]
+        if not features:
+            return HandlerResult(success=False, error="Need at least 1 feature column")
+
+        clean = df[features + [target]].dropna()
+        if len(clean) < 5:
+            return HandlerResult(success=False, error="Need at least 5 non-null rows")
+
+        X = clean[features].values
+        y = clean[target].values
+        model = LinearRegression().fit(X, y)
+        r2 = round(float(model.score(X, y)), 4)
+        y_pred = model.predict(X)
+
+        coef_df = pd.DataFrame({"feature": features, "coefficient": [round(float(c), 4) for c in model.coef_]})
+        coef_df["abs_coeff"] = coef_df["coefficient"].abs()
+        coef_df = coef_df.sort_values("abs_coeff", ascending=False).drop(columns=["abs_coeff"])
+        coef_df.loc[len(coef_df)] = {"feature": "(intercept)", "coefficient": round(float(model.intercept_), 4)}
+
+        fig = px.scatter(x=y, y=y_pred, opacity=0.5, labels={"x": "Actual", "y": "Predicted"})
+        fig.update_traces(marker_color="#FB8C3C", marker_size=4)
+        fig.add_trace(go.Scatter(x=[float(y.min()), float(y.max())], y=[float(y.min()), float(y.max())],
+                                 mode="lines", line=dict(dash="dash", color="#E71D36"), name="Perfect fit"))
+        _style(fig, title=f"OLS Regression — {target} (R\u00b2={r2})")
+
+        return HandlerResult(
+            success=True, result_df=coef_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"OLS on {len(features)} features \u2192 R\u00b2={r2}. Top predictor: {coef_df.iloc[0]['feature']} (coeff={coef_df.iloc[0]['coefficient']:.4f})",
+        )
+
+    # ── 21. Top N analysis ───────────────────────────────────────────────
+
+    @staticmethod
+    def handle_top_n_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze top N rows by a metric with details."""
+        col = params.get("column")
+        n = int(params.get("n", 10))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not col or col not in num_cols:
+            col = num_cols[0] if num_cols else None
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+
+        top = df.nlargest(n, col)
+        overall_mean = float(df[col].mean())
+        top_mean = float(top[col].mean())
+
+        fig = px.bar(top.reset_index(drop=True), y=col, text=col)
+        fig.update_traces(marker_color="#FB8C3C", texttemplate="%{text:,.2f}", textposition="outside")
+        _style(fig, title=f"Top {n} by {col}")
+
+        ratio = top_mean / overall_mean if overall_mean != 0 else 0
+        return HandlerResult(
+            success=True, result_df=top, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Top {n} by '{col}': range [{top[col].min():,.2f}, {top[col].max():,.2f}], mean={top_mean:,.2f} ({ratio:.1f}x overall avg)",
+        )
+
+    # ── 22. Bottom N analysis ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_bottom_n_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze bottom N rows by a metric."""
+        col = params.get("column")
+        n = int(params.get("n", 10))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not col or col not in num_cols:
+            col = num_cols[0] if num_cols else None
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+
+        bottom = df.nsmallest(n, col)
+        overall_mean = float(df[col].mean())
+
+        fig = px.bar(bottom.reset_index(drop=True), y=col, text=col)
+        fig.update_traces(marker_color="#2EC4B6", texttemplate="%{text:,.2f}", textposition="outside")
+        _style(fig, title=f"Bottom {n} by {col}")
+
+        return HandlerResult(
+            success=True, result_df=bottom, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Bottom {n} by '{col}': range [{bottom[col].min():,.2f}, {bottom[col].max():,.2f}], mean={bottom[col].mean():,.2f} (overall avg={overall_mean:,.2f})",
+        )
+
+    # ── 23. Percentile analysis ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_percentile_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Compare stats across percentile bands (Q1-Q4)."""
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not col or col not in num_cols:
+            col = num_cols[0] if num_cols else None
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+
+        temp = df[[col]].dropna().copy()
+        try:
+            temp["quartile"] = pd.qcut(temp[col], q=4, labels=["Q1 (0-25%)", "Q2 (25-50%)", "Q3 (50-75%)", "Q4 (75-100%)"], duplicates="drop")
+        except ValueError:
+            return HandlerResult(success=False, error=f"Cannot create quartiles for '{col}' — too few unique values")
+
+        stats = temp.groupby("quartile")[col].agg(["count", "mean", "min", "max", "std"]).round(3).reset_index()
+
+        fig = px.box(temp, x="quartile", y=col, color="quartile")
+        _style(fig, title=f"Percentile Analysis — {col}")
+        fig.update_layout(showlegend=False)
+
+        return HandlerResult(
+            success=True, result_df=stats, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Percentile breakdown for '{col}': Q1 mean={stats.iloc[0]['mean']:.3f}, Q4 mean={stats.iloc[-1]['mean']:.3f}",
+        )
+
+    # ── 24. Variance analysis ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_variance_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Variance contribution per feature (% of total variance)."""
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns found")
+
+        variances: dict[str, float] = {}
+        for c in num_cols:
+            v = df[c].var(skipna=True)
+            if pd.notna(v):
+                variances[c] = float(v)
+
+        total_var = sum(variances.values())
+        rows = [{"feature": k, "variance": round(v, 4), "pct_of_total": round(v / max(total_var, 1e-10) * 100, 2)}
+                for k, v in sorted(variances.items(), key=lambda x: x[1], reverse=True)]
+
+        result_df = pd.DataFrame(rows)
+
+        fig = px.bar(result_df.head(15), x="pct_of_total", y="feature", orientation="h",
+                     text="pct_of_total", color="pct_of_total", color_continuous_scale="YlOrRd")
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        _style(fig, title=f"Variance Contribution — {len(num_cols)} features")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False)
+
+        top3_pct = sum(r["pct_of_total"] for r in rows[:3])
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Top variance contributor: {rows[0]['feature']} ({rows[0]['pct_of_total']:.1f}%). Top 3 account for {top3_pct:.1f}%",
+        )
+
+    # ── 25. Change point detection ───────────────────────────────────────
+
+    @staticmethod
+    def handle_change_point_detect(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Detect change points in a numeric series using sliding window mean diff."""
+        col = params.get("column")
+        window = int(params.get("window", 10))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not col or col not in num_cols:
+            col = num_cols[0] if num_cols else None
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+
+        s = df[col].dropna().reset_index(drop=True)
+        if len(s) < window * 2:
+            return HandlerResult(success=False, error=f"Need at least {window * 2} data points, got {len(s)}")
+
+        diffs: list[float] = []
+        for i in range(window, len(s) - window):
+            left_mean = float(s.iloc[i - window:i].mean())
+            right_mean = float(s.iloc[i:i + window].mean())
+            diffs.append(abs(right_mean - left_mean))
+
+        diffs_s = pd.Series(diffs)
+        threshold = float(diffs_s.mean() + 2 * diffs_s.std())
+        change_points = [i + window for i, d in enumerate(diffs) if d > threshold]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=s.values, mode="lines", name=col, line=dict(color="#86868B", width=1)))
+        for cp in change_points[:10]:
+            fig.add_vline(x=cp, line_dash="dash", line_color="#E71D36", annotation_text=f"CP@{cp}")
+        _style(fig, title=f"Change Point Detection — {col} ({len(change_points)} points)")
+
+        cp_limited = change_points[:20]
+        result_df = pd.DataFrame({
+            "change_point_index": cp_limited,
+            "value": [round(float(s.iloc[cp]), 3) for cp in cp_limited],
+        })
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Found {len(change_points)} change points in '{col}' (window={window}, threshold=mean+2*std)",
+        )
+
+    # ── 26. Target analysis ──────────────────────────────────────────────
+
+    @staticmethod
+    def handle_target_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze relationship between each feature and a target column."""
+        target = params.get("column") or params.get("target")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not target or target not in num_cols:
+            target = num_cols[-1] if num_cols else None
+        if target is None:
+            return HandlerResult(success=False, error="No numeric target column found")
+
+        features = [c for c in num_cols if c != target]
+        if not features:
+            return HandlerResult(success=False, error="No feature columns found besides target")
+
+        rows: list[dict] = []
+        for f in features:
+            clean = df[[f, target]].dropna()
+            if len(clean) < 5:
+                continue
+            corr_val = float(clean[f].corr(clean[target]))
+            rows.append({"feature": f, "correlation": round(corr_val, 4),
+                         "abs_corr": round(abs(corr_val), 4),
+                         "direction": "Positive" if corr_val > 0 else "Negative"})
+
+        if not rows:
+            return HandlerResult(success=False, error=f"No valid features for target '{target}'")
+
+        result_df = pd.DataFrame(rows).sort_values("abs_corr", ascending=False)
+
+        fig = px.bar(result_df.head(15), x="correlation", y="feature", orientation="h",
+                     color="correlation", color_continuous_scale="RdBu_r", text="correlation")
+        fig.update_traces(texttemplate="%{text:+.3f}", textposition="outside")
+        _style(fig, title=f"Feature-Target Correlation (target={target})")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        top_feat = result_df.iloc[0]["feature"]
+        top_corr = result_df.iloc[0]["correlation"]
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Target '{target}': strongest predictor is '{top_feat}' (r={top_corr:+.3f})",
+        )
+
+    # ── 27. Multicollinearity check (VIF) ────────────────────────────────
+
+    @staticmethod
+    def handle_multicollinearity_check(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """VIF-based multicollinearity detection."""
+        from sklearn.linear_model import LinearRegression
+
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need at least 2 numeric columns")
+
+        cols = num_cols[:15]
+        clean = df[cols].dropna()
+        if len(clean) < 10:
+            return HandlerResult(success=False, error="Need at least 10 non-null rows")
+
+        rows: list[dict] = []
+        X = clean[cols].values
+        for i, c in enumerate(cols):
+            y_i = X[:, i]
+            X_i = np.delete(X, i, axis=1)
+            if X_i.shape[1] == 0:
+                continue
+            r2 = float(LinearRegression().fit(X_i, y_i).score(X_i, y_i))
+            vif = 1.0 / (1.0 - r2) if r2 < 1 else float("inf")
+            concern = "High" if vif > 10 else "Moderate" if vif > 5 else "Low"
+            rows.append({"feature": c, "VIF": round(vif, 2), "R2_other": round(r2, 4), "concern": concern})
+
+        result_df = pd.DataFrame(rows).sort_values("VIF", ascending=False)
+
+        fig = px.bar(result_df, x="VIF", y="feature", orientation="h", color="concern",
+                     text="VIF", color_discrete_map={"Low": "#2EC4B6", "Moderate": "#FF9F1C", "High": "#E71D36"})
+        fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+        _style(fig, title=f"Multicollinearity Check (VIF) — {len(cols)} features")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        high_vif = [r for r in rows if r["VIF"] > 10]
+        worst = rows[0] if rows else {"feature": "N/A", "VIF": 0}
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"VIF analysis: {len(high_vif)} features with high multicollinearity (VIF>10). Worst: {worst['feature']} (VIF={worst['VIF']:.1f})",
+        )
+
+    # ── 28. A/B test ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_ab_test(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """A/B test with significance: p-value, effect size, confidence interval."""
+        from scipy import stats as sp_stats
+
+        metric_col = params.get("column") or params.get("metric")
+        group_col = params.get("group_column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        if not metric_col or metric_col not in num_cols:
+            metric_col = num_cols[0] if num_cols else None
+        if metric_col is None:
+            return HandlerResult(success=False, error="No numeric metric column found")
+
+        if not group_col or group_col not in cat_cols:
+            for c in cat_cols:
+                if df[c].nunique() == 2:
+                    group_col = c
+                    break
+            if not group_col:
+                group_col = cat_cols[0] if cat_cols else None
+        if group_col is None:
+            return HandlerResult(success=False, error="No categorical group column found")
+
+        groups = df[group_col].dropna().unique()[:2]
+        if len(groups) < 2:
+            return HandlerResult(success=False, error="Need exactly 2 groups for A/B test")
+
+        a = df[df[group_col] == groups[0]][metric_col].dropna()
+        b = df[df[group_col] == groups[1]][metric_col].dropna()
+
+        stat, p = sp_stats.ttest_ind(a, b)
+        pooled_std = float(np.sqrt((a.var() * (len(a) - 1) + b.var() * (len(b) - 1)) / (len(a) + len(b) - 2)))
+        effect_d = abs(float(a.mean()) - float(b.mean())) / max(pooled_std, 1e-10)
+        se_diff = float(np.sqrt(a.var() / len(a) + b.var() / len(b)))
+        ci_low = float(a.mean() - b.mean()) - 1.96 * se_diff
+        ci_high = float(a.mean() - b.mean()) + 1.96 * se_diff
+
+        winner = str(groups[0]) if float(a.mean()) > float(b.mean()) else str(groups[1])
+        sig = "Significant" if p < 0.05 else "Not significant"
+
+        result_df = pd.DataFrame({
+            "metric": ["test", "p_value", "significant", "effect_size_d", f"mean_{groups[0]}", f"mean_{groups[1]}",
+                       "diff", "ci_lower", "ci_upper", "winner", "n_A", "n_B"],
+            "value": ["Welch t-test", round(float(p), 6), sig, round(effect_d, 3),
+                      round(float(a.mean()), 3), round(float(b.mean()), 3),
+                      round(float(a.mean() - b.mean()), 3), round(ci_low, 3), round(ci_high, 3),
+                      winner, len(a), len(b)],
+        })
+
+        fig = px.box(df[df[group_col].isin(groups)], x=group_col, y=metric_col, color=group_col)
+        _style(fig, title=f"A/B Test: {metric_col} — {sig} (p={float(p):.4f})")
+        fig.update_layout(showlegend=False)
+
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"A/B test ({metric_col}): {sig} (p={float(p):.4f}). {winner} wins. Effect size d={effect_d:.3f}, 95% CI [{ci_low:.3f}, {ci_high:.3f}]",
+        )
+
+    # ── 29. Pareto analysis ──────────────────────────────────────────────
+
+    @staticmethod
+    def handle_pareto_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Pareto 80/20 rule analysis on a column."""
+        col = params.get("column")
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if not col or col not in df.columns:
+            col = cat_cols[0] if cat_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No column found for Pareto analysis")
+
+        counts = df[col].value_counts()
+        total = counts.sum()
+        pareto = pd.DataFrame({"category": counts.index.astype(str), "count": counts.values})
+        pareto["pct"] = round(pareto["count"] / total * 100, 2)
+        pareto["cumulative_pct"] = round(pareto["pct"].cumsum(), 2)
+
+        cutoff_idx = int((pareto["cumulative_pct"] >= 80).idxmax())
+        n_for_80 = cutoff_idx + 1
+        pct_categories = round(n_for_80 / len(pareto) * 100, 1)
+
+        top = pareto.head(20)
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(go.Bar(x=top["category"], y=top["count"], name="Count", marker_color="#FB8C3C"), secondary_y=False)
+        fig.add_trace(go.Scatter(x=top["category"], y=top["cumulative_pct"], name="Cumulative %",
+                                 line=dict(color="#E71D36", width=2), mode="lines+markers"), secondary_y=True)
+        fig.add_hline(y=80, line_dash="dash", line_color="#86868B", secondary_y=True, annotation_text="80%")
+        _style(fig, title=f"Pareto Analysis — {col}")
+        fig.update_layout(yaxis_title="Count", yaxis2_title="Cumulative %")
+
+        return HandlerResult(
+            success=True, result_df=pareto, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Pareto: top {n_for_80} of {len(pareto)} categories ({pct_categories:.0f}%) account for 80% of values in '{col}'",
+        )
+
+    # ── 30. Data completeness scorecard ──────────────────────────────────
+
+    @staticmethod
+    def handle_data_completeness(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Data completeness scorecard per column + overall score."""
+        rows: list[dict] = []
+        for c in df.columns:
+            n_total = len(df)
+            n_present = int(df[c].count())
+            n_missing = n_total - n_present
+            completeness = round(n_present / max(n_total, 1) * 100, 2)
+            grade = "A" if completeness >= 95 else "B" if completeness >= 80 else "C" if completeness >= 50 else "F"
+            rows.append({
+                "column": c, "total": n_total, "present": n_present,
+                "missing": n_missing, "completeness_pct": completeness, "grade": grade,
+            })
+
+        result_df = pd.DataFrame(rows).sort_values("completeness_pct", ascending=True)
+        overall = round(float(result_df["completeness_pct"].mean()), 1)
+        overall_grade = "A" if overall >= 95 else "B" if overall >= 80 else "C" if overall >= 50 else "F"
+
+        fig = px.bar(result_df, x="completeness_pct", y="column", orientation="h",
+                     color="grade", text="completeness_pct",
+                     color_discrete_map={"A": "#2EC4B6", "B": "#FB8C3C", "C": "#FF9F1C", "F": "#E71D36"})
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        _style(fig, title=f"Data Completeness Scorecard — Overall: {overall}% ({overall_grade})")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_range=[0, 105])
+
+        incomplete = [r for r in rows if r["completeness_pct"] < 100]
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"Data completeness: {overall}% ({overall_grade}). {len(incomplete)}/{len(rows)} columns have missing values.",
         )
