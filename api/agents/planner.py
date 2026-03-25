@@ -189,6 +189,28 @@ output a JSON execution plan.
 
 ## DECISION RULES — READ CAREFULLY
 
+### FIRST: Is this about the dataset?
+Before anything else, ask yourself: **Does this message require the dataset to answer?**
+- If the user asks a general knowledge question, casual chat, opinion, math, coding help,
+  or anything NOT requiring the loaded data → set `"direct_answer": true` with empty steps.
+- If the user references columns, data, statistics, charts, cleaning, or anything that
+  needs the actual dataset → proceed to handler/codegen below.
+
+Examples of direct_answer (NOT about the dataset):
+- "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" → general question, answer directly
+- "what is machine learning?" → general knowledge
+- "how do I write a for loop in Python?" → coding help
+- "thank you" / "ok" / "got it" → casual chat
+- "1+1=?" → simple math
+- "what's the weather today?" → off-topic
+
+Examples of dataset-related (use handler/codegen):
+- "show nulls" → stats.null_report (references data quality)
+- "plot price distribution" → viz (references column)
+- "clean the data" → clean handlers (modifies dataset)
+- "how many rows?" → stats.shape (about the dataset)
+- "คอลัมน์ไหนมี null มากที่สุด" → stats.null_report (about columns)
+
 ### When to use a handler
 ALWAYS prefer a handler when one fits. Handlers are instant, reliable, and tested.
 Scan the handler table above — if ANY handler matches the user's intent, use it.
@@ -244,9 +266,18 @@ When the user works with text/NLP data or asks to prepare text for ML:
 8. For any chart request → use the matching viz handler (apply smart chart selection above)
 9. For "correlation" (no chart word) → stats.correlation
 10. For "correlation heatmap" → viz.heatmap
-11. If user speaks Thai, translate intent to English and plan normally.
+11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
+12. If the message is NOT about the dataset at all → use direct_answer (see format below).
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
+
+For direct_answer (NOT about the dataset):
+{{
+  "understanding": "one sentence",
+  "output_type": "text",
+  "direct_answer": true,
+  "steps": []
+}}
 
 For handler steps:
 {{"step_num":1,"description":"...","handler":{{"id":"category.sub","params":{{}}}}}}
@@ -254,7 +285,7 @@ For handler steps:
 For codegen steps:
 {{"step_num":2,"description":"...","codegen":{{"task":"detailed Python task description","produces":"dataframe|chart|text"}}}}
 
-Full format:
+Full format (data-related):
 {{
   "understanding": "one sentence",
   "output_type": "query | generate",
@@ -325,6 +356,21 @@ User: "show distribution of price" (distribution intent → histogram)
 
 User: "plot price vs area" (relationship intent → scatter)
 {{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
+
+User: "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" (general question, NOT about dataset)
+{{"understanding":"General question about word frequency — not related to the dataset","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "what is machine learning?" (general knowledge)
+{{"understanding":"General knowledge question","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "thank you" (casual chat)
+{{"understanding":"Casual response","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "1+1 เท่ากับเท่าไหร่" (simple math, not about data)
+{{"understanding":"Simple math question","output_type":"text","direct_answer":true,"steps":[]}}
+
+User: "how do I write a for loop?" (coding help)
+{{"understanding":"Programming question","output_type":"text","direct_answer":true,"steps":[]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
