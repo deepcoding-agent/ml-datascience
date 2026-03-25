@@ -1,4 +1,4 @@
-"""Feature engineering handler — importance, PCA, correlation filter, log transform."""
+"""Feature engineering handler — 20 handlers for selection, transforms, encoding, creation."""
 from __future__ import annotations
 
 import numpy as np
@@ -380,3 +380,148 @@ class FeatureHandler(BaseHandler):
             )
         except Exception as e:
             return HandlerResult(success=False, error=f"Mutual info error: {e}")
+
+    # ── 10. Lag features (time series) ─────────────────────────────────────
+
+    @staticmethod
+    def handle_lag_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Create lag/shift features for time series data."""
+        col = params.get("column")
+        lags = params.get("lags", [1, 2, 3])
+        if isinstance(lags, int):
+            lags = list(range(1, lags + 1))
+
+        result = df.copy()
+        cols_to_lag = (
+            [col] if col and col in result.columns
+            else result.select_dtypes(include="number").columns.tolist()[:3]
+        )
+        created = []
+
+        for c in cols_to_lag:
+            for lag in lags:
+                result[f"{c}_lag{lag}"] = result[c].shift(lag)
+                created.append(f"{c}_lag{lag}")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Created {len(created)} lag features from {len(cols_to_lag)} column(s), lags={lags}",
+        )
+
+    # ── 11. Text features ──────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_text_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract text statistics: length, word_count, digit_count, uppercase_ratio."""
+        col = params.get("column")
+        result = df.copy()
+        str_cols = (
+            [col] if col and col in result.columns
+            else result.select_dtypes(include="object").columns.tolist()
+        )
+        if not str_cols:
+            return HandlerResult(success=False, error="No string columns found")
+
+        created = []
+        for c in str_cols:
+            s = result[c].fillna("").astype(str)
+            result[f"{c}_len"] = s.str.len()
+            result[f"{c}_word_count"] = s.str.split().str.len().fillna(0).astype(int)
+            result[f"{c}_digit_count"] = s.str.count(r"\d")
+            str_len = s.str.len().replace(0, 1)
+            result[f"{c}_upper_ratio"] = (s.str.count(r"[A-Z]") / str_len).round(4)
+            created.extend([f"{c}_len", f"{c}_word_count", f"{c}_digit_count", f"{c}_upper_ratio"])
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Extracted {len(created)} text features from {len(str_cols)} column(s)",
+        )
+
+    # ── 12. Quantile transform ─────────────────────────────────────────────
+
+    @staticmethod
+    def handle_quantile_transform(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Quantile transform — maps values to uniform or normal distribution."""
+        col = params.get("column")
+        distribution = params.get("distribution", "normal")
+        result = df.copy()
+
+        try:
+            from sklearn.preprocessing import QuantileTransformer
+            cols = (
+                [col] if col and col in result.columns
+                else result.select_dtypes(include="number").columns.tolist()
+            )
+            X = result[cols].dropna()
+            if len(X) < 2:
+                return HandlerResult(success=False, error="Not enough data for quantile transform")
+
+            qt = QuantileTransformer(output_distribution=distribution, random_state=42)
+            transformed = pd.DataFrame(qt.fit_transform(X), index=X.index, columns=cols)
+            for c in cols:
+                result[c] = result[c].astype(float)
+            result.loc[X.index, cols] = transformed
+
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Quantile transform ({distribution}) on {len(cols)} columns",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Quantile transform error: {e}")
+
+    # ── 13. Diff features (time series) ────────────────────────────────────
+
+    @staticmethod
+    def handle_diff_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Create difference features (first/second order) for time series."""
+        col = params.get("column")
+        periods = params.get("periods", 1)
+        result = df.copy()
+
+        cols_to_diff = (
+            [col] if col and col in result.columns
+            else result.select_dtypes(include="number").columns.tolist()[:3]
+        )
+        created = []
+
+        for c in cols_to_diff:
+            result[f"{c}_diff{periods}"] = result[c].diff(periods)
+            created.append(f"{c}_diff{periods}")
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Created {len(created)} diff features (periods={periods})",
+        )
+
+    # ── 14. Aggregation features ───────────────────────────────────────────
+
+    @staticmethod
+    def handle_aggregation_features(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Create group-by aggregation features (mean/std/count per group)."""
+        group_col = params.get("column")
+        agg_col = params.get("agg_column")
+        result = df.copy()
+
+        cat_cols = result.select_dtypes(include=["object", "category"]).columns.tolist()
+        num_cols = result.select_dtypes(include="number").columns.tolist()
+
+        if not group_col or group_col not in result.columns:
+            group_col = cat_cols[0] if cat_cols else None
+        if group_col is None:
+            return HandlerResult(success=False, error="No categorical column found for grouping")
+
+        agg_cols = [agg_col] if agg_col and agg_col in num_cols else num_cols[:3]
+        created = []
+
+        for c in agg_cols:
+            for agg in ["mean", "std", "count"]:
+                col_name = f"{c}_{agg}_by_{group_col}"
+                result[col_name] = result.groupby(group_col)[c].transform(agg)
+                if agg != "count":
+                    result[col_name] = result[col_name].round(4)
+                created.append(col_name)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Created {len(created)} aggregation features grouped by '{group_col}'",
+        )

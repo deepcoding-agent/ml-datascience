@@ -121,6 +121,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "cyclical_encode"):     FeatureHandler.handle_cyclical_encode,
     ("feature", "sqrt_transform"):      FeatureHandler.handle_sqrt_transform,
     ("feature", "mutual_info"):         FeatureHandler.handle_mutual_info,
+    ("feature", "lag_features"):        FeatureHandler.handle_lag_features,
+    ("feature", "text_features"):       FeatureHandler.handle_text_features,
+    ("feature", "quantile_transform"):  FeatureHandler.handle_quantile_transform,
+    ("feature", "diff_features"):       FeatureHandler.handle_diff_features,
+    ("feature", "aggregation_features"):FeatureHandler.handle_aggregation_features,
 }
 
 

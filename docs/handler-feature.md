@@ -1,4 +1,4 @@
-# Handler Feature Reference — 101 Pre-built Handlers
+# Handler Feature Reference — 106 Pre-built Handlers
 
 Complete reference for all pre-built handlers in the PrepPilot DS-Agent.
 The AI planner selects handlers by `category.id` and passes params as JSON.
@@ -213,7 +213,7 @@ All charts use Plotly with a unified minimal theme (plotly_white, `#FB8C3C` acce
 
 ---
 
-## Feature Engineering (15 handlers)
+## Feature Engineering (20 handlers)
 
 Feature creation, selection, and transformation — most produce `output_type: "generate"`.
 
@@ -240,6 +240,7 @@ Feature creation, selection, and transformation — most produce `output_type: "
 | `feature.log_transform` | log1p transform for highly skewed columns (skew > 1) | `column?` |
 | `feature.sqrt_transform` | Square root transform for moderately skewed columns (skew > 0.5) | `column?` |
 | `feature.power_transform` | Yeo-Johnson or Box-Cox power transform (standardized) | `column?`, `method?` |
+| `feature.quantile_transform` | Quantile transform to uniform or normal distribution | `column?`, `distribution?` (normal/uniform) |
 
 ### Encoding
 
@@ -256,6 +257,10 @@ Feature creation, selection, and transformation — most produce `output_type: "
 | `feature.datetime_features` | Extract year, month, day, dayofweek, hour from datetime columns | `column?` |
 | `feature.ratio_features` | Create ratio features between numeric column pairs (col_a / col_b) | `columns?` |
 | `feature.polynomial_features` | Create interaction features (col_a × col_b) for numeric columns | `columns?` |
+| `feature.lag_features` | Create lag/shift features for time series data | `column?`, `lags?` (list or int, default [1,2,3]) |
+| `feature.diff_features` | Create difference features (first/second order) for time series | `column?`, `periods?` (default 1) |
+| `feature.text_features` | Extract text statistics: length, word count, digit count, uppercase ratio | `column?` |
+| `feature.aggregation_features` | Create group-by aggregation features (mean/std/count per group) | `column?` (group-by col), `agg_column?` |
 
 ---
 
