@@ -125,6 +125,7 @@ def run_datascience_agent(
         user_message=message,
         df_context=df_ctx,
         llm=planner_llm,
+        model_id=model_id,
     )
 
     # Step 4b: Direct answer — planner decided this is NOT about the dataset

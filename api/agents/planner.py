@@ -507,17 +507,9 @@ When the user asks complex analytical questions, prefer analysis handlers over c
 9. For "correlation" (no chart word) → stats.correlation
 10. For "correlation heatmap" → viz.heatmap
 11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
-12. If the message is NOT about the dataset at all → use direct_answer (see format below).
+12. For multi-step requests ("clean then show chart"), create multiple steps spanning categories.
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
-
-For direct_answer (NOT about the dataset):
-{{
-  "understanding": "one sentence",
-  "output_type": "text",
-  "direct_answer": true,
-  "steps": []
-}}
 
 For handler steps:
 {{"step_num":1,"description":"...","handler":{{"id":"category.sub","params":{{}}}}}}
@@ -597,20 +589,17 @@ User: "show distribution of price" (distribution intent → histogram)
 User: "plot price vs area" (relationship intent → scatter)
 {{"understanding":"Scatter plot of price vs area","output_type":"query","steps":[{{"step_num":1,"description":"Scatter price vs area","handler":{{"id":"viz.scatter","params":{{"columns":["area","price"]}}}}}}]}}
 
-User: "ไก่ ไข่ ไก่ หมา คำไหนมีมากที่สุด" (general question, NOT about dataset)
-{{"understanding":"General question about word frequency — not related to the dataset","output_type":"text","direct_answer":true,"steps":[]}}
+User: "remove duplicates, fill nulls, then show a bar chart of bedrooms" (multi-step, 3 categories)
+{{"understanding":"Clean dataset then visualize","output_type":"generate","steps":[{{"step_num":1,"description":"Remove duplicates","handler":{{"id":"clean.remove_duplicates","params":{{}}}}}},{{"step_num":2,"description":"Fill missing values","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"auto"}}}}}},{{"step_num":3,"description":"Bar chart of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"bedrooms"}}}}}}]}}
 
-User: "what is machine learning?" (general knowledge)
-{{"understanding":"General knowledge question","output_type":"text","direct_answer":true,"steps":[]}}
+User: "ลบ outliers แล้วทำ EDA" (clean then analyze — 2 steps)
+{{"understanding":"Remove outliers then auto EDA","output_type":"generate","steps":[{{"step_num":1,"description":"Remove outliers","handler":{{"id":"clean.remove_outliers","params":{{}}}}}},{{"step_num":2,"description":"Automated EDA","handler":{{"id":"analysis.auto_eda","params":{{}}}}}}]}}
 
-User: "thank you" (casual chat)
-{{"understanding":"Casual response","output_type":"text","direct_answer":true,"steps":[]}}
+User: "fill nulls with median and encode categoricals" (clean + transform — 2 steps)
+{{"understanding":"Fill nulls then encode","output_type":"generate","steps":[{{"step_num":1,"description":"Fill nulls with median","handler":{{"id":"clean.fill_nulls","params":{{"strategy":"median"}}}}}},{{"step_num":2,"description":"Label encode categoricals","handler":{{"id":"transform.encode_label","params":{{}}}}}}]}}
 
-User: "1+1 เท่ากับเท่าไหร่" (simple math, not about data)
-{{"understanding":"Simple math question","output_type":"text","direct_answer":true,"steps":[]}}
-
-User: "how do I write a for loop?" (coding help)
-{{"understanding":"Programming question","output_type":"text","direct_answer":true,"steps":[]}}
+User: "check data quality and show missing values chart" (analysis + viz — 2 steps)
+{{"understanding":"Data quality then null chart","output_type":"query","steps":[{{"step_num":1,"description":"Data quality report","handler":{{"id":"analysis.data_quality","params":{{}}}}}},{{"step_num":2,"description":"Missing values chart","handler":{{"id":"viz.null_bar","params":{{}}}}}}]}}
 
 IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 """
@@ -619,24 +608,29 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 # ── Stage 1: Category router ────────────────────────────────────────────────
 
 ROUTER_PROMPT = """\
-Classify this user message into 1-2 handler categories for a data-science agent.
+Classify this user message into 1-3 handler categories for a data-science agent.
 
-User message: "{user_message}"
-Dataset columns: {columns}
+User: "{user_message}"
+Columns: {columns}
 
 Categories:
-- stats: descriptive statistics, counts, distributions, tests, reports, data info
-- clean: fix data quality, fill nulls, remove duplicates, fix types, standardize
-- transform: filter, sort, group, encode, scale, split, merge, reshape, math
+- stats: statistics, counts, distributions, tests, reports, data info, describe, nulls, shape
+- clean: fix quality, fill nulls, remove duplicates, fix types, standardize, remove outliers
+- transform: filter, sort, group, encode, scale, split, merge, reshape, math, train/test split
 - viz: charts, plots, graphs, visualizations, show/display data visually
-- feature: feature engineering, transforms (log/pca/encode), create new features
-- nlp: text processing, tokenize, sentiment, keywords, word frequency, language
-- analysis: deep analysis, compare, cluster, anomaly detect, correlation, EDA, ML readiness
+- feature: feature engineering, log/pca/encode transforms, create new derived features
+- nlp: text processing, tokenize, sentiment, keywords, word frequency, text cleaning, NLP
+- analysis: deep analysis, compare, cluster, anomaly, correlation, EDA, ML readiness, trends
 - direct_answer: NOT about the dataset — general knowledge, casual chat, math, coding help
 
-Output ONLY a JSON object: {{"categories": ["cat1", "cat2"], "direct_answer": false}}
-Or for non-data questions: {{"categories": [], "direct_answer": true}}
-Pick 1-2 most relevant categories. No explanation."""
+Rules:
+- Pick 1 category for simple requests ("show nulls" → stats)
+- Pick 2-3 categories when the request spans multiple operations ("clean then show chart" → clean, viz)
+- If user says "then"/"and"/"แล้วก็" → likely multi-category
+- direct_answer: only for questions completely unrelated to the data
+
+Output ONLY JSON: {{"categories": ["cat1"], "direct_answer": false}}
+Or: {{"categories": [], "direct_answer": true}}"""
 
 
 def _split_catalog_by_category() -> dict[str, str]:
@@ -682,15 +676,24 @@ def _get_catalog_sections() -> dict[str, str]:
     return _CATALOG_SECTIONS
 
 
-def _route_categories(user_message: str, columns: list[str], llm) -> tuple[list[str], bool]:
-    """Stage 1: Lightweight LLM call to classify intent into categories."""
+def _route_categories(
+    user_message: str, columns: list[str], model_id: str | None,
+) -> tuple[list[str], bool]:
+    """Stage 1: Lightweight LLM call to classify intent into categories.
+
+    Uses low max_tokens (150) for speed — this is just classification,
+    not generation. Separate LLM instance to avoid polluting the cache.
+    """
+    from api.llm import get_llm
+
     prompt = ROUTER_PROMPT.format(
         user_message=user_message,
         columns=", ".join(columns[:15]),
     )
 
     try:
-        response = llm.invoke(prompt)
+        router_llm = get_llm(temperature=0.0, max_tokens=150, model_id=model_id)
+        response = router_llm.invoke(prompt)
         raw = response.content.strip()
         if "```" in raw:
             raw = raw.split("```json")[-1].split("```")[0].strip() if "```json" in raw else raw.split("```")[1].split("```")[0].strip()
@@ -700,7 +703,7 @@ def _route_categories(user_message: str, columns: list[str], llm) -> tuple[list[
         direct = result.get("direct_answer", False)
 
         valid_cats = {"stats", "clean", "transform", "viz", "feature", "nlp", "analysis"}
-        categories = [c for c in categories if c in valid_cats]
+        categories = [c for c in categories if c in valid_cats][:3]
 
         log.info("  router → categories=%s, direct_answer=%s", categories, direct)
         return categories, bool(direct)
@@ -725,19 +728,19 @@ def plan_steps(
     user_message: str,
     df_context: str,
     llm,
+    model_id: str | None = None,
 ) -> dict:
     """Two-stage planning: route → focused plan.
 
-    Stage 1: Lightweight router classifies into 1-2 categories (~200 tokens)
-    Stage 2: Planner sees only relevant handlers (~50-100 instead of 350)
+    Stage 1: Lightweight router (max_tokens=150) classifies into 1-3 categories
+    Stage 2: Planner sees only relevant handlers (~50-150 instead of 350)
     """
     # Extract column names for router
     col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
     columns = col_match[:15] if col_match else []
 
-    # Stage 1: Route
-    router_llm = type(llm).__call__  # reuse same LLM instance
-    categories, is_direct = _route_categories(user_message, columns, llm)
+    # Stage 1: Route (lightweight, ~150 tokens)
+    categories, is_direct = _route_categories(user_message, columns, model_id)
 
     if is_direct:
         log.info("  router → direct_answer")
