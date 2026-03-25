@@ -744,8 +744,8 @@ def _format_history(history: list | None) -> str:
         role = msg.role if hasattr(msg, "role") else msg.get("role", "?")
         content = msg.content if hasattr(msg, "content") else msg.get("content", "")
         # Truncate long messages
-        if len(content) > 200:
-            content = content[:200] + "..."
+        if len(content) > 500:
+            content = content[:500] + "..."
         lines.append(f"{role}: {content}")
     return "\n".join(lines) if lines else "(no previous messages)"
 
