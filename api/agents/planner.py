@@ -370,6 +370,26 @@ HANDLER_CATALOG = """\
 | analysis.ab_test | A/B test with significance (p-value, effect size, confidence interval) | column? (metric), group_column? |
 | analysis.pareto_analysis | Pareto 80/20 rule analysis on a column | column? |
 | analysis.data_completeness | data completeness scorecard per column + overall score | (none) |
+| analysis.seasonality_detect | detect seasonality via autocorrelation + chart | column? |
+| analysis.cluster_profile | profile each cluster's characteristics after K-Means | n? (clusters, default 3) |
+| analysis.feature_interaction | detect feature interaction effects on target | column? (target) |
+| analysis.cohort_analysis | cohort-based analysis by categorical groups | column? (group), value_column? |
+| analysis.rfm_analysis | RFM scoring on first 3 numeric columns | (none) |
+| analysis.gap_analysis | find significant gaps in sorted numeric data | column? |
+| analysis.benchmark_compare | compare column means against benchmark targets | benchmarks? (dict) |
+| analysis.sensitivity_analysis | sensitivity of target to each feature | column? (target) |
+| analysis.correlation_network | correlation edges above threshold | threshold? (default 0.5) |
+| analysis.feature_drift | compare first/second half distributions | (none) |
+| analysis.sample_bias_check | check sampling bias vs full population | sample_frac? (default 0.3) |
+| analysis.effect_size | Cohen's d effect sizes between two groups | column? (group col) |
+| analysis.bootstrap_ci | bootstrap confidence intervals for column mean | column?, n_bootstrap?, confidence? |
+| analysis.cross_correlation | cross-correlation between two columns at various lags | columns? (list of 2) |
+| analysis.survival_curve | basic survival/retention curve | column? |
+| analysis.concentration_analysis | Lorenz curve + Gini coefficient | column? |
+| analysis.diminishing_returns | detect diminishing returns between two columns | columns? (list of 2) |
+| analysis.categorical_target_crosstab | crosstab heatmap of two categorical columns | column? (target), feature_column? |
+| analysis.prediction_baseline | compute naive prediction baselines (mean/mode) | column? (target) |
+| analysis.data_readiness_score | overall ML data readiness score (completeness, balance, size) | (none) |
 """
 
 PLANNER_PROMPT = """\

@@ -1598,3 +1598,501 @@ class AnalysisHandler(BaseHandler):
             charts_plotly=[fig.to_json()],
             summary=f"Data completeness: {overall}% ({overall_grade}). {len(incomplete)}/{len(rows)} columns have missing values.",
         )
+
+    # ── 31. Seasonality detect ───────────────────────────────────────────
+
+    @staticmethod
+    def handle_seasonality_detect(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in num_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+        s = df[col].dropna().reset_index(drop=True)
+        if len(s) < 10:
+            return HandlerResult(success=False, error="Need ≥10 data points")
+        autocorrs = [round(float(s.autocorr(lag=i)), 4) for i in range(1, min(len(s) // 2, 30))]
+        peak_lag = int(np.argmax(autocorrs[1:]) + 2) if len(autocorrs) > 1 else 0
+        peak_val = max(autocorrs[1:]) if len(autocorrs) > 1 else 0
+        result_df = pd.DataFrame({"lag": list(range(1, len(autocorrs) + 1)), "autocorrelation": autocorrs})
+        fig = px.bar(result_df, x="lag", y="autocorrelation", text="autocorrelation")
+        fig.update_traces(marker_color="#FB8C3C", texttemplate="%{text:.3f}", textposition="outside")
+        _style(fig, title=f"Autocorrelation — {col} (peak lag={peak_lag}, r={peak_val:.3f})")
+        seasonal = "Likely seasonal" if peak_val > 0.3 else "No clear seasonality"
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"{seasonal} in '{col}'. Peak autocorrelation at lag {peak_lag} (r={peak_val:.3f})")
+
+    # ── 32. Cluster profile ──────────────────────────────────────────────
+
+    @staticmethod
+    def handle_cluster_profile(df: pd.DataFrame, params: dict) -> HandlerResult:
+        n_clusters = int(params.get("n", 3))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need ≥2 numeric columns")
+        try:
+            from sklearn.cluster import KMeans
+            from sklearn.preprocessing import StandardScaler
+            X = df[num_cols].dropna()
+            scaler = StandardScaler()
+            Xs = scaler.fit_transform(X)
+            km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            labels = km.fit_predict(Xs)
+            X_copy = X.copy()
+            X_copy["_cluster"] = labels
+            profile = X_copy.groupby("_cluster")[num_cols].mean().round(3).reset_index()
+            counts = X_copy["_cluster"].value_counts().sort_index()
+            profile["_count"] = counts.values
+            fig = px.bar(profile.melt(id_vars=["_cluster", "_count"], value_vars=num_cols[:6]),
+                         x="variable", y="value", color="_cluster", barmode="group", text="value")
+            fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+            _style(fig, title=f"Cluster Profiles — {n_clusters} clusters")
+            return HandlerResult(success=True, result_df=profile, output_type="query", charts_plotly=[fig.to_json()],
+                                 summary=f"Profiled {n_clusters} clusters across {len(num_cols)} features. Sizes: {dict(counts)}")
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Cluster profile error: {e}")
+
+    # ── 33. Feature interaction detect ───────────────────────────────────
+
+    @staticmethod
+    def handle_feature_interaction(df: pd.DataFrame, params: dict) -> HandlerResult:
+        target = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if not target or target not in num_cols:
+            target = num_cols[-1] if num_cols else None
+        if target is None or len(num_cols) < 3:
+            return HandlerResult(success=False, error="Need target + ≥2 features")
+        feats = [c for c in num_cols if c != target][:8]
+        rows = []
+        y = df[target].dropna()
+        for i, f1 in enumerate(feats):
+            for f2 in feats[i + 1:]:
+                clean = df[[f1, f2, target]].dropna()
+                interaction = clean[f1] * clean[f2]
+                r_individual = max(abs(clean[f1].corr(clean[target])), abs(clean[f2].corr(clean[target])))
+                r_interaction = abs(interaction.corr(clean[target]))
+                if r_interaction > r_individual:
+                    rows.append({"feature_1": f1, "feature_2": f2, "individual_max_r": round(r_individual, 4),
+                                 "interaction_r": round(r_interaction, 4), "lift": round(r_interaction - r_individual, 4)})
+        rows.sort(key=lambda x: x["lift"], reverse=True)
+        result_df = pd.DataFrame(rows[:15]) if rows else pd.DataFrame(columns=["feature_1", "feature_2", "interaction_r", "lift"])
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Found {len(rows)} feature interactions improving correlation with '{target}'")
+
+    # ── 34. Cohort analysis ──────────────────────────────────────────────
+
+    @staticmethod
+    def handle_cohort_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        value_col = params.get("value_column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        col = col if col and col in df.columns else (cat_cols[0] if cat_cols else None)
+        value_col = value_col if value_col and value_col in num_cols else (num_cols[0] if num_cols else None)
+        if not col or not value_col:
+            return HandlerResult(success=False, error="Need categorical column + numeric value column")
+        cohorts = df.groupby(col)[value_col].agg(["count", "mean", "median", "sum", "std"]).round(2).reset_index()
+        cohorts = cohorts.sort_values("mean", ascending=False)
+        fig = px.bar(cohorts, x=col, y="mean", text="count", color="mean", color_continuous_scale="YlOrRd")
+        fig.update_traces(texttemplate="n=%{text}", textposition="outside")
+        _style(fig, title=f"Cohort Analysis — {value_col} by {col}")
+        return HandlerResult(success=True, result_df=cohorts, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Analyzed {len(cohorts)} cohorts by '{col}'. Mean '{value_col}' range: {cohorts['mean'].min():.2f}–{cohorts['mean'].max():.2f}")
+
+    # ── 35. RFM analysis ────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_rfm_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 3:
+            return HandlerResult(success=False, error="Need ≥3 numeric columns for RFM scoring")
+        cols = num_cols[:3]
+        result = df.copy()
+        for c in cols:
+            result[f"{c}_score"] = pd.qcut(result[c].rank(method="first"), q=5, labels=[1, 2, 3, 4, 5]).astype(int)
+        score_cols = [f"{c}_score" for c in cols]
+        result["rfm_total"] = result[score_cols].sum(axis=1)
+        summary = result[score_cols + ["rfm_total"]].describe().round(2).reset_index()
+        fig = px.histogram(result, x="rfm_total", nbins=13, text_auto=True)
+        fig.update_traces(marker_color="#FB8C3C")
+        _style(fig, title=f"RFM Score Distribution (columns: {', '.join(cols)})")
+        return HandlerResult(success=True, result_df=result, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"RFM scoring on {cols}. Score range: {int(result['rfm_total'].min())}–{int(result['rfm_total'].max())}")
+
+    # ── 36. Gap analysis ─────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_gap_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in num_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+        s = df[col].dropna().sort_values().reset_index(drop=True)
+        diffs = s.diff().dropna()
+        mean_gap = float(diffs.mean())
+        std_gap = float(diffs.std()) if len(diffs) > 1 else 0
+        threshold = mean_gap + 2 * std_gap
+        large_gaps = diffs[diffs > threshold]
+        rows = [{"position": int(i), "value_before": round(float(s.iloc[i - 1]), 4), "value_after": round(float(s.iloc[i]), 4),
+                 "gap_size": round(float(diffs.iloc[i - 1]), 4)} for i in large_gaps.index[:20]]
+        result_df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["position", "value_before", "value_after", "gap_size"])
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Found {len(large_gaps)} significant gaps in '{col}' (threshold={threshold:.2f}, mean_gap={mean_gap:.2f})")
+
+    # ── 37. Benchmark compare ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_benchmark_compare(df: pd.DataFrame, params: dict) -> HandlerResult:
+        benchmarks = params.get("benchmarks")  # dict {col: target_value}
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if not benchmarks or not isinstance(benchmarks, dict):
+            benchmarks = {c: float(df[c].mean()) for c in num_cols[:5]}
+        rows = []
+        for col, target in benchmarks.items():
+            if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+                actual = float(df[col].mean())
+                diff = actual - float(target)
+                pct = diff / abs(float(target)) * 100 if float(target) != 0 else 0
+                rows.append({"column": col, "actual": round(actual, 2), "benchmark": float(target),
+                             "difference": round(diff, 2), "pct_diff": round(pct, 1),
+                             "status": "Above" if diff > 0 else "Below" if diff < 0 else "Equal"})
+        result_df = pd.DataFrame(rows)
+        fig = px.bar(result_df, x="column", y="pct_diff", color="status", text="pct_diff",
+                     color_discrete_map={"Above": "#2EC4B6", "Below": "#E71D36", "Equal": "#86868B"})
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        _style(fig, title="Benchmark Comparison — % Difference from Target")
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Compared {len(rows)} metrics against benchmarks")
+
+    # ── 38. Sensitivity analysis ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_sensitivity_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        target = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        target = target if target and target in num_cols else (num_cols[-1] if num_cols else None)
+        if target is None or len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need target + features")
+        feats = [c for c in num_cols if c != target][:10]
+        rows = []
+        baseline = float(df[target].mean())
+        for f in feats:
+            std = float(df[f].std())
+            if std == 0: continue
+            high = df.copy(); high[f] = high[f] + std
+            low = df.copy(); low[f] = low[f] - std
+            corr = abs(float(df[f].corr(df[target])))
+            rows.append({"feature": f, "baseline": round(baseline, 2), "correlation": round(corr, 4),
+                          "sensitivity": round(corr * std, 4), "std": round(std, 4)})
+        rows.sort(key=lambda x: x["sensitivity"], reverse=True)
+        result_df = pd.DataFrame(rows)
+        fig = px.bar(result_df, x="sensitivity", y="feature", orientation="h", text="sensitivity")
+        fig.update_traces(marker_color="#FB8C3C", texttemplate="%{text:.4f}", textposition="outside")
+        _style(fig, title=f"Sensitivity Analysis — {target}")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Sensitivity of '{target}' to {len(rows)} features")
+
+    # ── 39. Correlation network ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_correlation_network(df: pd.DataFrame, params: dict) -> HandlerResult:
+        threshold = float(params.get("threshold", 0.5))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(num_cols) < 2:
+            return HandlerResult(success=False, error="Need ≥2 numeric columns")
+        corr = df[num_cols].corr()
+        edges = []
+        for i, c1 in enumerate(num_cols):
+            for j, c2 in enumerate(num_cols):
+                if i < j and abs(corr.loc[c1, c2]) >= threshold:
+                    edges.append({"source": c1, "target": c2, "correlation": round(float(corr.loc[c1, c2]), 4),
+                                  "strength": "strong" if abs(corr.loc[c1, c2]) >= 0.7 else "moderate"})
+        result_df = pd.DataFrame(edges) if edges else pd.DataFrame(columns=["source", "target", "correlation"])
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Correlation network: {len(edges)} edges above |r|≥{threshold} among {len(num_cols)} features")
+
+    # ── 40. Feature drift ────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_feature_drift(df: pd.DataFrame, params: dict) -> HandlerResult:
+        num_cols = df.select_dtypes(include="number").columns.tolist()[:10]
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns")
+        mid = len(df) // 2
+        first, second = df.iloc[:mid], df.iloc[mid:]
+        rows = []
+        for c in num_cols:
+            m1, m2 = float(first[c].mean()), float(second[c].mean())
+            s1, s2 = float(first[c].std()), float(second[c].std())
+            drift_pct = abs(m1 - m2) / max(abs(m1), 1e-10) * 100
+            rows.append({"column": c, "first_half_mean": round(m1, 4), "second_half_mean": round(m2, 4),
+                          "drift_pct": round(drift_pct, 2), "drifted": drift_pct > 10})
+        result_df = pd.DataFrame(rows)
+        drifted = sum(1 for r in rows if r["drifted"])
+        fig = px.bar(result_df, x="column", y="drift_pct", color="drifted", text="drift_pct",
+                     color_discrete_map={True: "#E71D36", False: "#2EC4B6"})
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        _style(fig, title=f"Feature Drift Analysis — {drifted}/{len(rows)} features drifted")
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Feature drift: {drifted}/{len(rows)} features show >10% mean drift between halves")
+
+    # ── 41. Sample bias check ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_sample_bias_check(df: pd.DataFrame, params: dict) -> HandlerResult:
+        sample_frac = float(params.get("sample_frac", 0.3))
+        num_cols = df.select_dtypes(include="number").columns.tolist()[:8]
+        if not num_cols:
+            return HandlerResult(success=False, error="No numeric columns")
+        sample = df.sample(frac=sample_frac, random_state=42)
+        rows = []
+        for c in num_cols:
+            pop_mean, samp_mean = float(df[c].mean()), float(sample[c].mean())
+            bias = abs(pop_mean - samp_mean) / max(abs(pop_mean), 1e-10) * 100
+            rows.append({"column": c, "population_mean": round(pop_mean, 4), "sample_mean": round(samp_mean, 4),
+                          "bias_pct": round(bias, 2), "acceptable": bias < 5})
+        result_df = pd.DataFrame(rows)
+        issues = sum(1 for r in rows if not r["acceptable"])
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Sample bias check ({sample_frac*100:.0f}% sample): {issues}/{len(rows)} features show >5% bias")
+
+    # ── 42. Effect size ──────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_effect_size(df: pd.DataFrame, params: dict) -> HandlerResult:
+        group_col = params.get("column")
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        group_col = group_col if group_col and group_col in cat_cols else (cat_cols[0] if cat_cols else None)
+        if not group_col or not num_cols:
+            return HandlerResult(success=False, error="Need categorical group column + numeric features")
+        groups = df[group_col].dropna().unique()[:2]
+        if len(groups) < 2:
+            return HandlerResult(success=False, error=f"Need ≥2 groups in '{group_col}'")
+        g1, g2 = df[df[group_col] == groups[0]], df[df[group_col] == groups[1]]
+        rows = []
+        for c in num_cols[:10]:
+            m1, m2 = float(g1[c].mean()), float(g2[c].mean())
+            s_pooled = np.sqrt((float(g1[c].std()) ** 2 + float(g2[c].std()) ** 2) / 2)
+            d = (m1 - m2) / max(s_pooled, 1e-10)
+            size = "large" if abs(d) >= 0.8 else "medium" if abs(d) >= 0.5 else "small"
+            rows.append({"feature": c, "mean_1": round(m1, 4), "mean_2": round(m2, 4),
+                          "cohens_d": round(d, 4), "effect_size": size})
+        result_df = pd.DataFrame(rows)
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Effect sizes ({groups[0]} vs {groups[1]}): {sum(1 for r in rows if r['effect_size']!='small')}/{len(rows)} features have medium/large effect")
+
+    # ── 43. Bootstrap CI ─────────────────────────────────────────────────
+
+    @staticmethod
+    def handle_bootstrap_ci(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        n_boot = int(params.get("n_bootstrap", 1000))
+        ci = float(params.get("confidence", 0.95))
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in num_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+        s = df[col].dropna().values
+        rng = np.random.RandomState(42)
+        means = [float(np.mean(rng.choice(s, size=len(s), replace=True))) for _ in range(n_boot)]
+        alpha = (1 - ci) / 2
+        lo, hi = np.percentile(means, [alpha * 100, (1 - alpha) * 100])
+        result_df = pd.DataFrame({"metric": ["mean", "ci_lower", "ci_upper", "ci_width", "n_bootstrap"],
+                                   "value": [round(float(np.mean(s)), 4), round(float(lo), 4), round(float(hi), 4),
+                                             round(float(hi - lo), 4), n_boot]})
+        fig = px.histogram(x=means, nbins=40)
+        fig.update_traces(marker_color="#FB8C3C")
+        fig.add_vline(x=lo, line_dash="dash", line_color="#E71D36")
+        fig.add_vline(x=hi, line_dash="dash", line_color="#E71D36")
+        _style(fig, title=f"Bootstrap {ci*100:.0f}% CI — {col}: [{lo:.4f}, {hi:.4f}]")
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Bootstrap {ci*100:.0f}% CI for '{col}' mean: [{lo:.4f}, {hi:.4f}] (n={n_boot})")
+
+    # ── 44. Cross-correlation ────────────────────────────────────────────
+
+    @staticmethod
+    def handle_cross_correlation(df: pd.DataFrame, params: dict) -> HandlerResult:
+        columns = params.get("columns", [])
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(columns) >= 2 and all(c in num_cols for c in columns[:2]):
+            c1, c2 = columns[0], columns[1]
+        elif len(num_cols) >= 2:
+            c1, c2 = num_cols[0], num_cols[1]
+        else:
+            return HandlerResult(success=False, error="Need 2 numeric columns")
+        max_lag = min(len(df) // 3, 20)
+        rows = []
+        for lag in range(-max_lag, max_lag + 1):
+            if lag >= 0:
+                r = float(df[c1].iloc[lag:].reset_index(drop=True).corr(df[c2].iloc[:len(df) - lag].reset_index(drop=True)))
+            else:
+                r = float(df[c2].iloc[-lag:].reset_index(drop=True).corr(df[c1].iloc[:len(df) + lag].reset_index(drop=True)))
+            rows.append({"lag": lag, "correlation": round(r, 4) if not np.isnan(r) else 0})
+        result_df = pd.DataFrame(rows)
+        peak = result_df.loc[result_df["correlation"].abs().idxmax()]
+        fig = px.bar(result_df, x="lag", y="correlation")
+        fig.update_traces(marker_color="#2EC4B6")
+        _style(fig, title=f"Cross-Correlation: {c1} vs {c2} (peak lag={int(peak['lag'])}, r={peak['correlation']:.3f})")
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Cross-correlation {c1}↔{c2}: peak at lag {int(peak['lag'])} (r={peak['correlation']:.3f})")
+
+    # ── 45. Survival curve ───────────────────────────────────────────────
+
+    @staticmethod
+    def handle_survival_curve(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in num_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+        s = df[col].dropna().sort_values().reset_index(drop=True)
+        n = len(s)
+        survival = [(1 - (i + 1) / n) for i in range(n)]
+        result_df = pd.DataFrame({col: s.values, "survival_prob": [round(x, 4) for x in survival]})
+        fig = go.Figure(go.Scatter(x=s.values, y=survival, mode="lines", line=dict(color="#FB8C3C", width=2)))
+        fig.add_hline(y=0.5, line_dash="dash", line_color="#86868B")
+        _style(fig, title=f"Survival Curve — {col}")
+        fig.update_layout(xaxis_title=col, yaxis_title="Survival Probability")
+        median_val = float(s.median())
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Survival curve for '{col}': median={median_val:.2f}, range [{s.min():.2f}, {s.max():.2f}]")
+
+    # ── 46. Concentration analysis ───────────────────────────────────────
+
+    @staticmethod
+    def handle_concentration_analysis(df: pd.DataFrame, params: dict) -> HandlerResult:
+        col = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        col = col if col and col in num_cols else (num_cols[0] if num_cols else None)
+        if col is None:
+            return HandlerResult(success=False, error="No numeric column found")
+        s = df[col].dropna().sort_values().values
+        n = len(s)
+        cum = np.cumsum(s) / s.sum()
+        pct = np.arange(1, n + 1) / n
+        gini = float(1 - 2 * np.trapz(cum, pct))
+        top10_share = float(s[int(n * 0.9):].sum() / s.sum() * 100)
+        top20_share = float(s[int(n * 0.8):].sum() / s.sum() * 100)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=pct * 100, y=cum * 100, mode="lines", name="Lorenz", line=dict(color="#FB8C3C", width=2)))
+        fig.add_trace(go.Scatter(x=[0, 100], y=[0, 100], mode="lines", name="Equality", line=dict(color="#86868B", dash="dash")))
+        _style(fig, title=f"Lorenz Curve — {col} (Gini={gini:.3f})")
+        fig.update_layout(xaxis_title="Population %", yaxis_title="Cumulative %")
+        result_df = pd.DataFrame({"metric": ["gini", "top_10%_share", "top_20%_share"], "value": [round(gini, 4), round(top10_share, 2), round(top20_share, 2)]})
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Concentration of '{col}': Gini={gini:.3f}, top 20% holds {top20_share:.1f}%")
+
+    # ── 47. Diminishing returns ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_diminishing_returns(df: pd.DataFrame, params: dict) -> HandlerResult:
+        columns = params.get("columns", [])
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if len(columns) >= 2 and all(c in num_cols for c in columns[:2]):
+            x_col, y_col = columns[0], columns[1]
+        elif len(num_cols) >= 2:
+            x_col, y_col = num_cols[0], num_cols[1]
+        else:
+            return HandlerResult(success=False, error="Need 2 numeric columns")
+        clean = df[[x_col, y_col]].dropna().sort_values(x_col).reset_index(drop=True)
+        n = len(clean)
+        mid = n // 2
+        r_first = float(clean.iloc[:mid][[x_col, y_col]].corr().iloc[0, 1])
+        r_second = float(clean.iloc[mid:][[x_col, y_col]].corr().iloc[0, 1])
+        diminishing = r_first > r_second and r_first > 0
+        fig = px.scatter(clean, x=x_col, y=y_col, trendline="lowess", opacity=0.5)
+        fig.update_traces(marker_color="#FB8C3C")
+        _style(fig, title=f"Diminishing Returns? {x_col} → {y_col} ({'Yes' if diminishing else 'No'})")
+        result_df = pd.DataFrame({"metric": ["r_first_half", "r_second_half", "diminishing"], "value": [round(r_first, 4), round(r_second, 4), diminishing]})
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"{'Diminishing returns detected' if diminishing else 'No diminishing returns'}: r drops from {r_first:.3f} to {r_second:.3f}")
+
+    # ── 48. Categorical target crosstab ──────────────────────────────────
+
+    @staticmethod
+    def handle_categorical_target_crosstab(df: pd.DataFrame, params: dict) -> HandlerResult:
+        target = params.get("column")
+        feature = params.get("feature_column")
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if not target or target not in cat_cols:
+            target = cat_cols[0] if cat_cols else None
+        if not feature or feature not in cat_cols:
+            feature = cat_cols[1] if len(cat_cols) > 1 else None
+        if not target or not feature:
+            return HandlerResult(success=False, error="Need 2 categorical columns")
+        ct = pd.crosstab(df[feature], df[target], margins=True, margins_name="Total")
+        ct_pct = pd.crosstab(df[feature], df[target], normalize="index").round(4) * 100
+        fig = px.imshow(ct_pct.values[:-1] if "Total" in ct_pct.index else ct_pct.values,
+                        x=ct_pct.columns.tolist(), y=ct_pct.index.tolist(),
+                        text_auto=".1f", color_continuous_scale="YlOrRd")
+        _style(fig, title=f"Crosstab: {feature} × {target} (%)")
+        return HandlerResult(success=True, result_df=ct.reset_index(), output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Crosstab: {feature} ({df[feature].nunique()} levels) × {target} ({df[target].nunique()} levels)")
+
+    # ── 49. Prediction baseline ──────────────────────────────────────────
+
+    @staticmethod
+    def handle_prediction_baseline(df: pd.DataFrame, params: dict) -> HandlerResult:
+        target = params.get("column")
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if target and target in df.columns:
+            pass
+        elif num_cols:
+            target = num_cols[-1]
+        elif cat_cols:
+            target = cat_cols[0]
+        else:
+            return HandlerResult(success=False, error="No columns found")
+        s = df[target].dropna()
+        rows = []
+        if pd.api.types.is_numeric_dtype(s):
+            rows.append({"baseline": "mean", "value": round(float(s.mean()), 4), "metric": "MAE", "score": round(float((s - s.mean()).abs().mean()), 4)})
+            rows.append({"baseline": "median", "value": round(float(s.median()), 4), "metric": "MAE", "score": round(float((s - s.median()).abs().mean()), 4)})
+            rows.append({"baseline": "zero", "value": 0, "metric": "MAE", "score": round(float(s.abs().mean()), 4)})
+        else:
+            mode = s.mode().iloc[0] if len(s.mode()) > 0 else "N/A"
+            acc = float((s == mode).mean())
+            rows.append({"baseline": "most_frequent", "value": str(mode), "metric": "accuracy", "score": round(acc, 4)})
+            rows.append({"baseline": "random", "value": "uniform", "metric": "accuracy", "score": round(1.0 / max(s.nunique(), 1), 4)})
+        result_df = pd.DataFrame(rows)
+        return HandlerResult(success=True, result_df=result_df, output_type="query",
+                             summary=f"Baselines for '{target}': best naive = {rows[0]['baseline']} ({rows[0]['metric']}={rows[0]['score']:.4f})")
+
+    # ── 50. Data readiness score ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_data_readiness_score(df: pd.DataFrame, params: dict) -> HandlerResult:
+        scores = {}
+        # Completeness
+        null_pct = df.isnull().mean().mean() * 100
+        scores["completeness"] = round(max(0, 100 - null_pct * 2), 1)
+        # Duplicates
+        dup_pct = df.duplicated().mean() * 100
+        scores["uniqueness"] = round(max(0, 100 - dup_pct * 2), 1)
+        # Consistency (no constant cols, no mixed types)
+        constant_pct = sum(1 for c in df.columns if df[c].nunique() <= 1) / max(len(df.columns), 1) * 100
+        scores["consistency"] = round(max(0, 100 - constant_pct * 5), 1)
+        # Balance (for categoricals)
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if cat_cols:
+            imb = max(df[c].value_counts().max() / max(df[c].value_counts().min(), 1) for c in cat_cols[:3])
+            scores["balance"] = round(max(0, 100 - (imb - 1) * 10), 1)
+        else:
+            scores["balance"] = 100.0
+        # Size
+        scores["size"] = min(100.0, round(len(df) / 10, 1))  # 1000 rows = 100%
+        overall = round(sum(scores.values()) / len(scores), 1)
+        grade = "A" if overall >= 90 else "B" if overall >= 75 else "C" if overall >= 50 else "D"
+        result_df = pd.DataFrame([{"dimension": k, "score": v} for k, v in scores.items()])
+        result_df = pd.concat([result_df, pd.DataFrame([{"dimension": "OVERALL", "score": overall}])], ignore_index=True)
+        fig = px.bar(result_df, x="score", y="dimension", orientation="h", text="score",
+                     color="score", color_continuous_scale=["#E71D36", "#FF9F1C", "#2EC4B6"])
+        fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+        _style(fig, title=f"ML Data Readiness — {overall}/100 ({grade})")
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_range=[0, 110], coloraxis_showscale=False)
+        return HandlerResult(success=True, result_df=result_df, output_type="query", charts_plotly=[fig.to_json()],
+                             summary=f"Data readiness score: {overall}/100 ({grade}). {', '.join(f'{k}={v}' for k, v in scores.items())}")
