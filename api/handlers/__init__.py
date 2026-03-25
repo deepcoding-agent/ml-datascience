@@ -12,6 +12,7 @@ from api.handlers.transform_handler import TransformHandler
 from api.handlers.viz_handler import VizHandler
 from api.handlers.feature_handler import FeatureHandler
 from api.handlers.nlp_handler import NlpHandler
+from api.handlers.analysis_handler import AnalysisHandler
 
 HandlerFunc = Callable[[pd.DataFrame, dict], HandlerResult]
 
@@ -158,6 +159,17 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("nlp", "text_chunk"):           NlpHandler.handle_text_chunk,
     ("nlp", "spelling_features"):    NlpHandler.handle_spelling_features,
     ("nlp", "text_concat"):          NlpHandler.handle_text_concat,
+    # Analysis (smart, high-level)
+    ("analysis", "compare_extremes"):     AnalysisHandler.handle_compare_extremes,
+    ("analysis", "deep_profile"):         AnalysisHandler.handle_deep_profile,
+    ("analysis", "group_insights"):       AnalysisHandler.handle_group_insights,
+    ("analysis", "anomaly_detect"):       AnalysisHandler.handle_anomaly_detect,
+    ("analysis", "data_quality"):         AnalysisHandler.handle_data_quality,
+    ("analysis", "correlation_insights"): AnalysisHandler.handle_correlation_insights,
+    ("analysis", "compare_columns"):      AnalysisHandler.handle_compare_columns,
+    ("analysis", "trend_detect"):         AnalysisHandler.handle_trend_detect,
+    ("analysis", "segment_analysis"):     AnalysisHandler.handle_segment_analysis,
+    ("analysis", "auto_eda"):             AnalysisHandler.handle_auto_eda,
 }
 
 

@@ -172,6 +172,20 @@ HANDLER_CATALOG = """\
 | nlp.text_chunk | split long texts into fixed-size word chunks (new rows per chunk) | column?, chunk_size? (default 200), overlap? (default 20) |
 | nlp.spelling_features | OOV/spelling quality features: rare-word count and ratio per row | column? |
 | nlp.text_concat | combine multiple text columns into one corpus column | columns? (list), separator? (default " "), new_name? (default "text_combined") |
+
+### Analysis (smart, high-level — use for complex questions, comparisons, insights)
+| id | what it does | params |
+|----|-------------|--------|
+| analysis.compare_extremes | compare rows with highest vs lowest value — side-by-side table + chart | column? (numeric col to compare by) |
+| analysis.deep_profile | deep statistical profile of a column: distribution, outliers, quartiles, chart | column? |
+| analysis.group_insights | compare stats across groups of a categorical column + box plot | column? (group col), value_column? (numeric) |
+| analysis.anomaly_detect | detect anomalies using IQR/Z-score — flag outlier rows + scatter chart | column?, method? (iqr/zscore) |
+| analysis.data_quality | comprehensive data quality scores per column + overall score + chart | (none) |
+| analysis.correlation_insights | find top correlations with explanation + scatter plots | n? (default 10) |
+| analysis.compare_columns | side-by-side comparison of two columns: stats + overlapping histogram | columns (list of 2) |
+| analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
+| analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
+| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
 """
 
 PLANNER_PROMPT = """\
@@ -254,6 +268,19 @@ When the user works with text/NLP data or asks to prepare text for ML:
 4. **Feature extraction** (generate): nlp.sentiment_score, nlp.regex_extract, nlp.language_detect, nlp.char_features, nlp.sentence_features, nlp.readability_score, nlp.emoji_features, nlp.keyword_extract, nlp.spelling_features
 5. **Data prep**: nlp.text_dedup (remove duplicates), nlp.text_filter (remove short/empty), nlp.text_mask_pii (anonymize), nlp.text_chunk (split long docs), nlp.text_augment (expand small datasets), nlp.text_concat (merge text columns)
 6. Combine multiple NLP steps when the user says "prepare text" or "preprocess for NLP"
+
+### Smart analysis — use analysis handlers for complex questions
+When the user asks complex analytical questions, prefer analysis handlers over codegen:
+- "compare max vs min" / "เปรียบเทียบสูงสุดกับต่ำสุด" → analysis.compare_extremes
+- "tell me about column X in detail" / "อธิบาย column X" → analysis.deep_profile
+- "compare groups" / "เปรียบเทียบกลุ่ม" → analysis.group_insights
+- "find outliers" / "หาค่าผิดปกติ" → analysis.anomaly_detect
+- "check data quality" / "ตรวจคุณภาพ" → analysis.data_quality
+- "what correlates with X?" / "อะไรสัมพันธ์กับ X" → analysis.correlation_insights
+- "compare column A vs B" → analysis.compare_columns
+- "is there a trend?" / "มี trend ไหม" → analysis.trend_detect
+- "segment the data" / "แบ่งกลุ่มข้อมูล" → analysis.segment_analysis
+- "analyze this data" / "วิเคราะห์ข้อมูล" / "EDA" → analysis.auto_eda
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.

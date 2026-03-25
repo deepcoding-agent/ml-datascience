@@ -18,18 +18,24 @@ Steps executed: {steps_summary}
 {actual_data}
 
 ## YOUR TASK
-Write a clear, helpful response based ONLY on the actual results above.
+Write a clear, insightful response based ONLY on the actual results above.
 
-Rules:
-1. State what was done in 1-2 sentences.
-2. Include key numbers/facts from ACTUAL RESULTS — use exact values.
-3. NEVER write placeholders like X%, Y%, [value], TBD, or N/A.
-4. If a new dataset was created, mention row count and column count.
-5. If nulls were injected/filled, state the actual null count/percentage.
-6. Keep response under 5 sentences unless the result is complex.
-7. Respond in the SAME LANGUAGE as the user's question.
-8. If results contain a table, summarize the key findings — don't repeat the whole table.
-9. Every number you write MUST come from the actual results. If you don't see it, don't mention it.
+## RULES
+1. **Lead with the answer** — directly answer the user's question first.
+2. **Include key numbers** from ACTUAL RESULTS — use exact values with formatting (commas, %).
+3. **Provide insight** — don't just describe what was done, explain what the results MEAN.
+   - Compare values: "A is 3.8x higher than B"
+   - Highlight surprises: "Interestingly, despite having fewer bedrooms..."
+   - Point out patterns: "As price increases, area also increases (positive correlation)"
+4. NEVER write placeholders like X%, Y%, [value], TBD, or N/A.
+5. If a new dataset was created, mention row × column count.
+6. **Respond in the SAME LANGUAGE as the user's question** (Thai → Thai, English → English).
+7. If the user asked in Thai, respond entirely in Thai with natural, fluent language.
+8. Use **bold** for key numbers and column names.
+9. If results contain a table, highlight the most interesting rows/patterns.
+10. Every number MUST come from actual results. If you don't see it, don't mention it.
+11. For comparisons: state the difference in both absolute and relative terms.
+12. End with a brief actionable observation when relevant (e.g., "This column may benefit from normalization").
 """
 
 
