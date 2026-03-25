@@ -400,7 +400,10 @@ PLANNER_PROMPT = """\
 You are the planner for a data-science agent. Given a user request and dataset,
 output a JSON execution plan.
 
-## USER REQUEST
+## CONVERSATION HISTORY (recent messages for context)
+{conversation_history}
+
+## CURRENT USER REQUEST
 {user_message}
 
 ## DATASET
@@ -494,6 +497,14 @@ When the user asks complex analytical questions, prefer analysis handlers over c
 - "is there a trend?" / "มี trend ไหม" → analysis.trend_detect
 - "segment the data" / "แบ่งกลุ่มข้อมูล" → analysis.segment_analysis
 - "analyze this data" / "วิเคราะห์ข้อมูล" / "EDA" → analysis.auto_eda
+
+### Follow-up questions — USE CONVERSATION HISTORY
+When the user says "plot that", "show me", "ขอแบบ plot", "ทำเป็น chart", "เดิม", "อันเดิม"
+or refers to something from a previous message:
+1. Read the CONVERSATION HISTORY section above
+2. Identify which column/topic was discussed previously
+3. Use THAT column — do NOT pick a random default column
+Example: if history says "parking value counts" and user says "plot it" → use column="parking"
 
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
@@ -724,16 +735,33 @@ def _build_focused_catalog(categories: list[str]) -> str:
 
 # ── Stage 2: Focused planner ───────────────────────────────────────────────
 
+def _format_history(history: list | None) -> str:
+    """Format recent conversation history for the planner prompt."""
+    if not history:
+        return "(no previous messages)"
+    lines: list[str] = []
+    for msg in history[-6:]:
+        role = msg.role if hasattr(msg, "role") else msg.get("role", "?")
+        content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+        # Truncate long messages
+        if len(content) > 200:
+            content = content[:200] + "..."
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines) if lines else "(no previous messages)"
+
+
 def plan_steps(
     user_message: str,
     df_context: str,
     llm,
     model_id: str | None = None,
+    history: list | None = None,
 ) -> dict:
     """Two-stage planning: route → focused plan.
 
     Stage 1: Lightweight router (max_tokens=150) classifies into 1-3 categories
     Stage 2: Planner sees only relevant handlers (~50-150 instead of 350)
+             + conversation history for follow-up context
     """
     # Extract column names for router
     col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
@@ -760,6 +788,7 @@ def plan_steps(
         user_message=user_message,
         df_context=df_context,
         handler_catalog=focused_catalog,
+        conversation_history=_format_history(history),
     )
 
     response = llm.invoke(prompt)
