@@ -172,6 +172,21 @@ HANDLER_CATALOG = """\
 | nlp.text_chunk | split long texts into fixed-size word chunks (new rows per chunk) | column?, chunk_size? (default 200), overlap? (default 20) |
 | nlp.spelling_features | OOV/spelling quality features: rare-word count and ratio per row | column? |
 | nlp.text_concat | combine multiple text columns into one corpus column | columns? (list), separator? (default " "), new_name? (default "text_combined") |
+| nlp.text_replace | find and replace text patterns (regex or literal) | column?, pattern, replacement, mapping? (dict), regex? (default true) |
+| nlp.text_split_sentences | split text into individual sentences (new rows per sentence) | column? |
+| nlp.text_oversample | oversample minority text classes to balance dataset | column? (label col) |
+| nlp.doc_term_matrix | build document-term frequency matrix (full vocab) | column?, n? (max features, default 100) |
+| nlp.text_window | extract sliding window contexts around a keyword | column?, keyword, window? (default 5) |
+| nlp.text_label_rules | create labels from keyword rules: {label: [keywords]} | column?, mapping (dict), default? |
+| nlp.word_overlap | Jaccard word overlap between two columns or consecutive rows | columns? (list of 2), column? |
+| nlp.text_truncate_pad | truncate or pad text to fixed word count | column?, max_words? (default 128), pad_token? |
+| nlp.text_length_dist | analyze text length distribution with histogram (output_type=query) | column? |
+| nlp.text_unique_words | extract words unique to each document (corpus-level rarity) | column? |
+| nlp.text_dedup_exact | fast exact-match text deduplication (case-insensitive) | column?, keep? (first/last) |
+| nlp.text_to_paragraphs | split text by blank lines into paragraphs (new rows) | column? |
+| nlp.text_count_pattern | count occurrences of a pattern per row, optionally filter | column?, pattern, filter? (bool) |
+| nlp.text_summary_report | comprehensive text dataset report: stats, quality, recommendations (output_type=query) | column? |
+| nlp.text_stratified_sample | stratified random sample maintaining label distribution | column? (label col), n? (default 100) |
 
 ### Analysis (smart, high-level — use for complex questions, comparisons, insights)
 | id | what it does | params |

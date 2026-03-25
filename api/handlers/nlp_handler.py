@@ -1,4 +1,4 @@
-"""NLP / Text preprocessing handler — 30 handlers for text cleaning,
+"""NLP / Text preprocessing handler — 45 handlers for text cleaning,
 tokenization, vectorization, and NLP feature engineering."""
 from __future__ import annotations
 
@@ -1424,4 +1424,570 @@ class NlpHandler(BaseHandler):
         return HandlerResult(
             success=True, result_df=result, output_type="generate",
             summary=f"Concatenated {len(text_cols)} columns → '{new_name}': {', '.join(text_cols)}",
+        )
+
+    # ── 31. Text replace (find & replace with regex) ─────────────────────
+
+    @staticmethod
+    def handle_text_replace(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Find and replace text patterns (regex or literal) across text columns.
+        Supports multiple replacements via a mapping dict."""
+        col = params.get("column")
+        pattern = params.get("pattern", "")
+        replacement = params.get("replacement", "")
+        mapping = params.get("mapping")  # dict of {find: replace, ...}
+        use_regex = params.get("regex", True)
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        total_replacements = 0
+        for c in text_cols:
+            s = result[c].fillna("").astype(str)
+            if mapping and isinstance(mapping, dict):
+                for find, repl in mapping.items():
+                    count = s.str.count(find).sum()
+                    total_replacements += int(count)
+                    s = s.str.replace(find, str(repl), regex=bool(use_regex))
+            elif pattern:
+                count = s.str.count(pattern).sum()
+                total_replacements += int(count)
+                s = s.str.replace(pattern, replacement, regex=bool(use_regex))
+            result[c] = s
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Replaced {total_replacements} occurrences across {len(text_cols)} column(s)",
+        )
+
+    # ── 32. Split text into sentences (new rows) ────────────────────────
+
+    @staticmethod
+    def handle_text_split_sentences(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Split text into individual sentences. Each sentence becomes a new row.
+        Useful for sentence-level classification or analysis."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        rows: list[dict] = []
+
+        for _, row in df.iterrows():
+            text = str(row.get(target, ""))
+            sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+            if not sents:
+                sents = [text]
+            for i, sent in enumerate(sents):
+                new_row = row.to_dict()
+                new_row[target] = sent
+                new_row["_sentence_id"] = i
+                new_row["_sentence_total"] = len(sents)
+                rows.append(new_row)
+
+        result = pd.DataFrame(rows).reset_index(drop=True)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Split '{target}': {len(df)} docs → {len(result)} sentences",
+        )
+
+    # ── 33. Text oversample (balance minority classes) ───────────────────
+
+    @staticmethod
+    def handle_text_oversample(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Oversample minority text classes to balance the dataset.
+        Duplicates rows from minority classes to match the majority class count."""
+        label_col = params.get("column")
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if not label_col or label_col not in df.columns:
+            candidates = [c for c in cat_cols if df[c].nunique() <= 20]
+            label_col = candidates[0] if candidates else None
+        if label_col is None:
+            return HandlerResult(success=False, error="No label column found for oversampling")
+
+        counts = df[label_col].value_counts()
+        max_count = counts.max()
+        parts: list[pd.DataFrame] = []
+        for label, count in counts.items():
+            subset = df[df[label_col] == label]
+            if count < max_count:
+                repeat = max_count // count
+                remainder = max_count % count
+                oversampled = pd.concat([subset] * repeat + [subset.head(remainder)], ignore_index=True)
+                parts.append(oversampled)
+            else:
+                parts.append(subset)
+
+        result = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Oversampled '{label_col}': {len(df)} → {len(result)} rows (all classes now ≈{max_count})",
+        )
+
+    # ── 34. Document-term matrix ─────────────────────────────────────────
+
+    @staticmethod
+    def handle_doc_term_matrix(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Build a full document-term frequency matrix.
+        Returns a sparse-style DataFrame with word counts per document."""
+        col = params.get("column")
+        max_features = int(params.get("n", 100))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        try:
+            from sklearn.feature_extraction.text import CountVectorizer
+            target = text_cols[0]
+            corpus = df[target].fillna("").astype(str)
+            vec = CountVectorizer(max_features=max_features, stop_words="english")
+            matrix = vec.fit_transform(corpus)
+            dtm = pd.DataFrame(
+                matrix.toarray(),
+                columns=vec.get_feature_names_out(),
+                index=df.index,
+            )
+            return HandlerResult(
+                success=True, result_df=dtm, output_type="generate",
+                summary=f"Document-term matrix: {dtm.shape[0]} docs × {dtm.shape[1]} terms",
+            )
+        except Exception as e:
+            return HandlerResult(success=False, error=f"Doc-term matrix error: {e}")
+
+    # ── 35. Sliding window context extraction ────────────────────────────
+
+    @staticmethod
+    def handle_text_window(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract sliding window contexts around a target keyword.
+        Creates new rows with the keyword and its surrounding context."""
+        col = params.get("column")
+        keyword = params.get("keyword", "")
+        window_size = int(params.get("window", 5))
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+        if not keyword:
+            return HandlerResult(success=False, error="Specify keyword= parameter")
+
+        target = text_cols[0]
+        contexts: list[dict] = []
+        kw_lower = keyword.lower()
+
+        for idx, row in df.iterrows():
+            text = str(row.get(target, ""))
+            words = text.split()
+            for i, w in enumerate(words):
+                if kw_lower in w.lower():
+                    start = max(0, i - window_size)
+                    end = min(len(words), i + window_size + 1)
+                    ctx = " ".join(words[start:end])
+                    contexts.append({
+                        "source_row": int(idx),  # type: ignore[arg-type]
+                        "keyword": keyword,
+                        "position": i,
+                        "context": ctx,
+                    })
+
+        if not contexts:
+            return HandlerResult(success=False, error=f"Keyword '{keyword}' not found in any text")
+
+        result = pd.DataFrame(contexts)
+        return HandlerResult(
+            success=True, result_df=result, output_type="query",
+            summary=f"Found {len(contexts)} occurrences of '{keyword}' with ±{window_size} word window",
+        )
+
+    # ── 36. Label from keyword rules ─────────────────────────────────────
+
+    @staticmethod
+    def handle_text_label_rules(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Create text labels based on keyword rules.
+        mapping: dict of {label: [keyword1, keyword2, ...]}."""
+        col = params.get("column")
+        mapping = params.get("mapping")  # {"positive": ["good","great"], "negative": ["bad","poor"]}
+        default_label = params.get("default", "other")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+        if not mapping or not isinstance(mapping, dict):
+            return HandlerResult(success=False, error="Provide mapping= dict: {label: [keywords]}")
+
+        target = text_cols[0]
+        result = df.copy()
+        s = result[target].fillna("").astype(str).str.lower()
+
+        def classify(text: str) -> str:
+            for label, keywords in mapping.items():
+                for kw in keywords:
+                    if kw.lower() in text:
+                        return str(label)
+            return default_label
+
+        result[f"{target}_label"] = s.apply(classify)
+        dist = result[f"{target}_label"].value_counts().to_dict()
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Labeled {len(result)} rows using {len(mapping)} rules. Distribution: {dist}",
+        )
+
+    # ── 37. Word overlap / Jaccard similarity ────────────────────────────
+
+    @staticmethod
+    def handle_word_overlap(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Compute word overlap (Jaccard similarity) between two text columns
+        or between consecutive rows of the same column."""
+        columns = params.get("columns", [])
+        col = params.get("column")
+        result = df.copy()
+
+        if columns and len(columns) >= 2 and all(c in df.columns for c in columns[:2]):
+            c1, c2 = columns[0], columns[1]
+            s1 = result[c1].fillna("").astype(str).str.lower()
+            s2 = result[c2].fillna("").astype(str).str.lower()
+
+            def jaccard(a: str, b: str) -> float:
+                wa = set(re.findall(r"\b\w+\b", a))
+                wb = set(re.findall(r"\b\w+\b", b))
+                if not wa and not wb:
+                    return 0.0
+                return round(len(wa & wb) / max(len(wa | wb), 1), 4)
+
+            result[f"{c1}_{c2}_jaccard"] = [jaccard(a, b) for a, b in zip(s1, s2)]
+            avg = result[f"{c1}_{c2}_jaccard"].mean()
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Jaccard similarity between '{c1}' and '{c2}': avg={avg:.4f}",
+            )
+        else:
+            # Consecutive row overlap within single column
+            text_cols = _get_text_cols(df, col)
+            if not text_cols:
+                return HandlerResult(success=False, error="No text columns found. Provide columns=[col1, col2] or column=col")
+            target = text_cols[0]
+            s = result[target].fillna("").astype(str).str.lower()
+            overlaps: list[float] = [0.0]
+            for i in range(1, len(s)):
+                wa = set(re.findall(r"\b\w+\b", s.iloc[i - 1]))
+                wb = set(re.findall(r"\b\w+\b", s.iloc[i]))
+                j = len(wa & wb) / max(len(wa | wb), 1) if (wa or wb) else 0.0
+                overlaps.append(round(j, 4))
+            result[f"{target}_row_overlap"] = overlaps
+            return HandlerResult(
+                success=True, result_df=result, output_type="generate",
+                summary=f"Row-to-row Jaccard overlap for '{target}': avg={np.mean(overlaps):.4f}",
+            )
+
+    # ── 38. Truncate or pad text to fixed length ─────────────────────────
+
+    @staticmethod
+    def handle_text_truncate_pad(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Truncate or pad text to a fixed word count.
+        Useful for preparing uniform-length input for models."""
+        col = params.get("column")
+        max_words = int(params.get("max_words", 128))
+        pad_token = params.get("pad_token", "")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        for c in text_cols:
+            def trunc_pad(text: str) -> str:
+                words = text.split()[:max_words]
+                if pad_token and len(words) < max_words:
+                    words.extend([pad_token] * (max_words - len(words)))
+                return " ".join(words)
+
+            result[c] = result[c].fillna("").astype(str).apply(trunc_pad)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Truncated/padded {len(text_cols)} column(s) to {max_words} words",
+        )
+
+    # ── 39. Text length distribution analysis ────────────────────────────
+
+    @staticmethod
+    def handle_text_length_dist(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Analyze text length distribution (char & word count) with charts.
+        Useful for choosing chunk size, max_len, or detecting anomalies."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        s = df[target].fillna("").astype(str)
+        char_lens = s.str.len()
+        word_lens = s.str.split().str.len().fillna(0).astype(int)
+
+        stats = pd.DataFrame({
+            "metric": ["count", "mean_chars", "median_chars", "std_chars", "min_chars", "max_chars",
+                        "mean_words", "median_words", "min_words", "max_words",
+                        "empty_rows", "single_word_rows"],
+            "value": [len(s), round(float(char_lens.mean()), 1), int(char_lens.median()),
+                      round(float(char_lens.std()), 1), int(char_lens.min()), int(char_lens.max()),
+                      round(float(word_lens.mean()), 1), int(word_lens.median()),
+                      int(word_lens.min()), int(word_lens.max()),
+                      int((char_lens == 0).sum()), int((word_lens <= 1).sum())],
+        })
+
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go_fig
+        fig = make_subplots(rows=1, cols=2, subplot_titles=["Character Length", "Word Count"])
+        fig.add_trace(go_fig.Histogram(x=char_lens, nbinsx=30, marker_color="#FB8C3C", name="Chars"), row=1, col=1)
+        fig.add_trace(go_fig.Histogram(x=word_lens, nbinsx=30, marker_color="#2EC4B6", name="Words"), row=1, col=2)
+        _style(fig, title=f"Text Length Distribution — {target} (n={len(s)})")
+        fig.update_layout(showlegend=False, height=350)
+
+        return HandlerResult(
+            success=True, result_df=stats, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=f"'{target}': avg {word_lens.mean():.0f} words/doc, range [{word_lens.min()}-{word_lens.max()}], {(char_lens==0).sum()} empty",
+        )
+
+    # ── 40. Extract unique / rare words per document ─────────────────────
+
+    @staticmethod
+    def handle_text_unique_words(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Extract words that appear only in one document (unique to that doc).
+        Creates a column with comma-separated rare/unique words per row."""
+        col = params.get("column")
+        result = df.copy()
+        text_cols = _get_text_cols(result, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        corpus = result[target].fillna("").astype(str).str.lower()
+
+        # Build document frequency
+        doc_freq: Counter = Counter()
+        doc_words: list[set] = []
+        for text in corpus:
+            words = set(re.findall(r"\b\w+\b", text)) - ENGLISH_STOPWORDS
+            doc_words.append(words)
+            doc_freq.update(words)
+
+        # Words appearing in only 1 document
+        unique_to_doc: list[str] = []
+        for words in doc_words:
+            uniques = sorted(w for w in words if doc_freq[w] == 1)
+            unique_to_doc.append(", ".join(uniques[:10]))
+
+        result[f"{target}_unique_words"] = unique_to_doc
+        result[f"{target}_unique_count"] = [len(w.split(", ")) if w else 0 for w in unique_to_doc]
+
+        total_unique = sum(1 for _, cnt in doc_freq.items() if cnt == 1)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Found {total_unique} corpus-unique words across {len(corpus)} documents",
+        )
+
+    # ── 41. Exact text deduplication (fast) ──────────────────────────────
+
+    @staticmethod
+    def handle_text_dedup_exact(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Remove rows with exact duplicate text (case-insensitive).
+        Much faster than similarity-based dedup for large datasets."""
+        col = params.get("column")
+        keep = params.get("keep", "first")  # first | last
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        result = df.copy()
+        result["_text_lower"] = result[target].fillna("").astype(str).str.lower().str.strip()
+        original = len(result)
+        result = result.drop_duplicates(subset="_text_lower", keep=keep).drop(columns="_text_lower").reset_index(drop=True)
+        removed = original - len(result)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Exact dedup on '{target}': {original} → {len(result)} rows (removed {removed} duplicates)",
+        )
+
+    # ── 42. Split text by paragraphs ─────────────────────────────────────
+
+    @staticmethod
+    def handle_text_to_paragraphs(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Split text into paragraphs (by blank lines). Each paragraph becomes a new row."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        rows: list[dict] = []
+
+        for _, row in df.iterrows():
+            text = str(row.get(target, ""))
+            paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+            if not paragraphs:
+                paragraphs = [text]
+            for i, para in enumerate(paragraphs):
+                new_row = row.to_dict()
+                new_row[target] = para
+                new_row["_para_id"] = i
+                new_row["_para_total"] = len(paragraphs)
+                rows.append(new_row)
+
+        result = pd.DataFrame(rows).reset_index(drop=True)
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Split '{target}': {len(df)} docs → {len(result)} paragraphs",
+        )
+
+    # ── 43. Count pattern occurrences ────────────────────────────────────
+
+    @staticmethod
+    def handle_text_count_pattern(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Count occurrences of a specific pattern (word/phrase/regex) per row.
+        Creates a count column and optionally filters rows with matches."""
+        col = params.get("column")
+        pattern = params.get("pattern", "")
+        filter_matches = params.get("filter", False)
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+        if not pattern:
+            return HandlerResult(success=False, error="Specify pattern= parameter")
+
+        target = text_cols[0]
+        result = df.copy()
+        s = result[target].fillna("").astype(str)
+        try:
+            result[f"count_{pattern[:20]}"] = s.str.count(pattern)
+        except re.error:
+            result[f"count_{pattern[:20]}"] = s.str.count(re.escape(pattern))
+
+        total = int(result[f"count_{pattern[:20]}"].sum())
+        rows_with = int((result[f"count_{pattern[:20]}"] > 0).sum())
+
+        if filter_matches:
+            result = result[result[f"count_{pattern[:20]}"] > 0].reset_index(drop=True)
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Pattern '{pattern}': {total} occurrences in {rows_with}/{len(df)} rows",
+        )
+
+    # ── 44. Text dataset summary report ──────────────────────────────────
+
+    @staticmethod
+    def handle_text_summary_report(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Comprehensive text dataset report: language mix, length stats,
+        vocabulary, quality issues, and recommendations."""
+        col = params.get("column")
+        text_cols = _get_text_cols(df, col)
+        if not text_cols:
+            return HandlerResult(success=False, error="No text columns found")
+
+        target = text_cols[0]
+        s = df[target].fillna("").astype(str)
+        findings: list[dict] = []
+
+        # Basic stats
+        empty = int((s.str.strip() == "").sum())
+        word_counts = s.str.split().str.len().fillna(0)
+        char_counts = s.str.len()
+        findings.append({"category": "Size", "detail": f"{len(s)} documents, {int(word_counts.sum()):,} total words"})
+        findings.append({"category": "Length", "detail": f"avg {word_counts.mean():.0f} words/doc, range [{int(word_counts.min())}-{int(word_counts.max())}]"})
+
+        if empty > 0:
+            findings.append({"category": "Quality", "detail": f"{empty} empty rows ({empty/len(s)*100:.1f}%)"})
+
+        # Vocabulary
+        all_words: list[str] = []
+        for text in s.str.lower():
+            all_words.extend(re.findall(r"\b\w+\b", text))
+        vocab_size = len(set(all_words))
+        findings.append({"category": "Vocabulary", "detail": f"{vocab_size:,} unique words, TTR={vocab_size/max(len(all_words),1):.4f}"})
+
+        # Duplicates
+        dup_count = s.str.lower().str.strip().duplicated().sum()
+        if dup_count > 0:
+            findings.append({"category": "Quality", "detail": f"{int(dup_count)} exact duplicates ({dup_count/len(s)*100:.1f}%)"})
+
+        # Language detection sample
+        def detect_script(text: str) -> str:
+            for ch in text[:100]:
+                cp = ord(ch)
+                if 0x0E00 <= cp <= 0x0E7F: return "Thai"
+                if 0x4E00 <= cp <= 0x9FFF: return "Chinese"
+                if 0x3040 <= cp <= 0x30FF: return "Japanese"
+            return "Latin"
+
+        scripts = s.head(100).apply(detect_script).value_counts()
+        findings.append({"category": "Language", "detail": ", ".join(f"{k}: {v}" for k, v in scripts.items())})
+
+        # Short texts
+        short = int((word_counts < 5).sum())
+        if short > 0:
+            findings.append({"category": "Quality", "detail": f"{short} very short texts (<5 words)"})
+
+        # Recommendations
+        recs: list[str] = []
+        if empty > 0:
+            recs.append(f"Remove {empty} empty rows with nlp.text_filter")
+        if dup_count > 0:
+            recs.append(f"Remove {int(dup_count)} duplicates with nlp.text_dedup_exact")
+        if word_counts.max() > 500:
+            recs.append(f"Consider nlp.text_chunk for long documents (max={int(word_counts.max())} words)")
+        if vocab_size > 10000:
+            recs.append("Large vocabulary — consider nlp.text_normalize or nlp.remove_stopwords")
+
+        for rec in recs:
+            findings.append({"category": "Recommendation", "detail": rec})
+
+        result_df = pd.DataFrame(findings)
+
+        # Chart
+        fig = px.histogram(x=word_counts, nbins=30)
+        fig.update_traces(marker_color="#FB8C3C")
+        _style(fig, title=f"Text Report — {target}: {len(s)} docs, {vocab_size:,} vocab")
+        fig.update_layout(xaxis_title="Words per document", yaxis_title="Count")
+
+        summary = "\n".join(f"• [{r['category']}] {r['detail']}" for r in findings)
+        return HandlerResult(
+            success=True, result_df=result_df, output_type="query",
+            charts_plotly=[fig.to_json()],
+            summary=summary,
+        )
+
+    # ── 45. Text stratified sample ───────────────────────────────────────
+
+    @staticmethod
+    def handle_text_stratified_sample(df: pd.DataFrame, params: dict) -> HandlerResult:
+        """Take a stratified random sample maintaining label distribution.
+        Useful for creating balanced train/test splits or review subsets."""
+        label_col = params.get("column")
+        n = int(params.get("n", 100))
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        if not label_col or label_col not in df.columns:
+            candidates = [c for c in cat_cols if df[c].nunique() <= 30]
+            label_col = candidates[0] if candidates else None
+        if label_col is None:
+            return HandlerResult(success=False, error="No label column for stratified sampling")
+
+        counts = df[label_col].value_counts()
+        n_classes = len(counts)
+        per_class = max(1, n // n_classes)
+
+        parts: list[pd.DataFrame] = []
+        for label in counts.index:
+            subset = df[df[label_col] == label]
+            sample_n = min(per_class, len(subset))
+            parts.append(subset.sample(n=sample_n, random_state=42))
+
+        result = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+        new_dist = result[label_col].value_counts().to_dict()
+
+        return HandlerResult(
+            success=True, result_df=result, output_type="generate",
+            summary=f"Stratified sample: {len(df)} → {len(result)} rows, {n_classes} classes. Distribution: {new_dist}",
         )
