@@ -133,6 +133,11 @@ HANDLER_CATALOG = """\
 | feature.cyclical_encode | sin/cos encoding for cyclical features | column, period? |
 | feature.sqrt_transform | square root transform for moderate skew | column? |
 | feature.mutual_info | mutual information scores (numeric + categorical) | column? (target) |
+| feature.lag_features | create lag/shift features for time series | column?, lags? (list or int, default [1,2,3]) |
+| feature.text_features | extract text stats: length, word count, digit count, uppercase ratio | column? |
+| feature.quantile_transform | map values to uniform/normal distribution | column?, distribution? (normal/uniform) |
+| feature.diff_features | create difference features (first/second order) | column?, periods? (default 1) |
+| feature.aggregation_features | group-by stats as new features (mean/std/count) | column? (group-by col), agg_column? |
 """
 
 PLANNER_PROMPT = """\

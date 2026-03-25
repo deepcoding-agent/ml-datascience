@@ -1,6 +1,6 @@
 # ml-datascience — PrepPilot FastAPI Backend
 
-FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 101 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
+FastAPI service powering the PrepPilot AI data science platform. Features an **AI-first agent architecture** where an LLM planner is the sole decision-maker — no hardcoded keywords or regex routing. 106 pre-built handlers, LLM-powered code generation fallback, and sandboxed Python execution. Supports **Anthropic Claude** and **OpenAI GPT** models with automatic provider detection. Returns text answers, interactive Plotly charts, cleaned datasets, EDA reports, and ML preparation pipelines.
 
 ---
 
@@ -53,13 +53,13 @@ DS-Agent API (FastAPI :8000)
         │   └── coding.py            Coding agent: concise Q&A (no dataset, max_tokens=1024)
         │
         ├── api/handlers/
-        │   ├── __init__.py          101-entry HANDLER_REGISTRY
+        │   ├── __init__.py          106-entry HANDLER_REGISTRY
         │   ├── base.py              HandlerResult dataclass, BaseHandler utilities, Thai keywords
         │   ├── stats_handler.py     18 stats functions (describe, correlation, normality_test, etc.)
         │   ├── clean_handler.py     20 cleaning functions (fill nulls, clip outliers, map values, etc.)
         │   ├── transform_handler.py 26 transform functions (filter, pivot, melt, rolling, etc.)
         │   ├── viz_handler.py       22 Plotly chart types (bar, scatter, qq_plot, density, etc.)
-        │   └── feature_handler.py   15 feature engineering functions (PCA, mutual_info, etc.)
+        │   └── feature_handler.py   20 feature engineering functions (PCA, mutual_info, etc.)
         │
         ├── api/routes/
         │   ├── chat.py              POST /chat — routes to DS-Agent or Coding Agent
@@ -85,7 +85,7 @@ POST /chat
  │            ├── Check for greeting (trivial shortcut, no AI needed)
  │            │
  │            ├── AI PLANNER (sole decision-maker)
- │            │     ↓ LLM sees full handler catalog (101 handlers with IDs + params)
+ │            │     ↓ LLM sees full handler catalog (106 handlers with IDs + params)
  │            │     ↓ Outputs JSON plan: each step has handler:{id, params} OR codegen:{task}
  │            │     ↓ No hardcoded keywords, no regex — AI decides everything
  │            │
@@ -113,7 +113,7 @@ The DS-Agent uses a fully AI-driven architecture where the **LLM planner is the 
 
 ### AI Planner
 
-The planner receives the user message, dataset context, and a **complete handler catalog** (all 101 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
+The planner receives the user message, dataset context, and a **complete handler catalog** (all 106 handlers with their IDs, descriptions, and parameters). It outputs a structured JSON plan where each step specifies either:
 
 - **`handler`** — `{id: "category.sub", params: {...}}` → instant execution via pre-built handler
 - **`codegen`** — `{task: "description", produces: "dataframe|chart|text"}` → LLM generates Python code
@@ -171,7 +171,7 @@ ml-datascience/
 │   │   ├── clean_handler.py          ← 20 cleaning functions
 │   │   ├── transform_handler.py      ← 26 transform functions
 │   │   ├── viz_handler.py            ← 22 Plotly chart types
-│   │   └── feature_handler.py        ← 15 feature engineering functions
+│   │   └── feature_handler.py        ← 20 feature engineering functions
 │   │
 │   └── routes/
 │       ├── chat.py                   ← POST /chat
@@ -410,7 +410,7 @@ Returns available LLM models with provider detection based on configured API key
 
 ## 7. Handler Registry
 
-101 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
+106 pre-built handlers across 5 categories. The AI planner sees the full catalog and selects handlers by ID.
 
 For the complete reference with all parameters, see **[docs/handler-feature.md](docs/handler-feature.md)**.
 
