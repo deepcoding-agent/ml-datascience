@@ -61,6 +61,36 @@ HANDLER_CATALOG = """\
 | clean.fill_with_value | fill nulls with specific constant | column?, value (e.g. -1, "Unknown") |
 | clean.deduplicate_by | remove duplicates by specific column(s) | column?, columns?, keep? (first/last) |
 | clean.drop_id_columns | auto-detect and drop ID-like columns | (none) |
+| clean.fix_numeric_strings | convert "$1,234" / "1.234,56" to numeric | column? |
+| clean.clean_column_names | remove special chars, spaces→underscore, lowercase | (none) |
+| clean.remove_empty_rows | remove rows where all values are null/empty | (none) |
+| clean.fill_mode | fill nulls with mode (most frequent value) | column? |
+| clean.fill_forward_backward | ffill then bfill to fill nulls | column? |
+| clean.fix_boolean | standardize yes/no/true/false/Y/N/1/0 → bool | column? |
+| clean.fix_encoding | fix mojibake/encoding issues (special chars) | column? |
+| clean.remove_html_tags | strip HTML/XML tags from strings | column? |
+| clean.clean_currency | clean currency strings ($, €, ¥, commas) → float | column? |
+| clean.standardize_dates | parse mixed date formats to consistent format | column?, format? (default %Y-%m-%d) |
+| clean.remove_non_ascii | remove non-ASCII characters | column? |
+| clean.remove_special_chars | remove special characters (keep alphanumeric + spaces) | column?, keep? (regex pattern) |
+| clean.normalize_text_case | normalize to title/upper/lower/sentence case | column?, case? (lower/upper/title/sentence) |
+| clean.cap_outliers_percentile | cap at Nth percentile | column?, lower? (default 1), upper? (default 99) |
+| clean.fill_median_by_group | fill nulls with group-level median | column (group col), value_column? |
+| clean.remove_zero_rows | remove rows where column(s) are zero | column? |
+| clean.remove_negative | remove rows with negative values | column? |
+| clean.standardize_categories | merge similar categories (strip, lower, map) | column, mapping? (dict) |
+| clean.remove_high_null_cols | drop columns above null threshold | threshold? (default 0.5) |
+| clean.clean_phone_numbers | standardize phone numbers to digits-only | column |
+| clean.split_name | split "John Doe" → first_name, last_name | column |
+| clean.fix_whitespace_names | fix " John  Doe " → "John Doe" | column? |
+| clean.remove_urls | remove URLs from text | column? |
+| clean.remove_emails | remove email addresses from text | column? |
+| clean.fix_mixed_types | convert mixed-type columns to consistent type | column? |
+| clean.fill_with_distribution | fill nulls by sampling from column distribution | column?, seed? |
+| clean.remove_rare_categories | replace categories with < N occurrences with "Other" | column, min_count? (default 5), replacement? |
+| clean.dedup_keep_latest | dedup by column keeping latest by sort column | column (key), date_column (sort) |
+| clean.fix_date_outliers | remove/clip dates outside valid range | column, min_date?, max_date?, action? (remove/clip) |
+| clean.clean_text_whitespace | normalize all whitespace (double spaces, tabs, newlines) | column? |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
