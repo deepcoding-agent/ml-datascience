@@ -68,7 +68,7 @@ def get_default_model_id() -> str:
 
 def build_lc_history(
     history: list[ChatMessage],
-    max_chars_per_msg: int = 1500,
+    max_chars_per_msg: int = 3000,
 ) -> list:
     """Convert ChatMessage list into LangChain message objects.
 
