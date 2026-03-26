@@ -166,6 +166,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("transform", "duplicate_column"): transform.handle_duplicate_column,
     ("transform", "fill_forward"):     transform.handle_fill_forward,
     ("transform", "interpolate_values"): transform.handle_interpolate_values,
+    ("transform", "chunk_rows"):        transform.handle_chunk_rows,
 
     # Viz
     ("viz", "bar_chart"):          viz.handle_bar_chart,

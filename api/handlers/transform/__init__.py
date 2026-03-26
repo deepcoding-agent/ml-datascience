@@ -49,6 +49,7 @@ from api.handlers.transform.reorder_columns import handle_reorder_columns
 from api.handlers.transform.duplicate_column import handle_duplicate_column
 from api.handlers.transform.fill_forward import handle_fill_forward
 from api.handlers.transform.interpolate_values import handle_interpolate_values
+from api.handlers.transform.chunk_rows import handle_chunk_rows
 
 __all__ = [
     "handle_filter",
@@ -101,4 +102,5 @@ __all__ = [
     "handle_duplicate_column",
     "handle_fill_forward",
     "handle_interpolate_values",
+    "handle_chunk_rows",
 ]

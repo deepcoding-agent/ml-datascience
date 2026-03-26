@@ -181,6 +181,7 @@ HANDLER_CATALOG = """\
 | transform.duplicate_column | duplicate a column with a new name | column, new_name? |
 | transform.fill_forward | forward-fill (ffill) nulls only | column? |
 | transform.interpolate_values | interpolate missing numeric values (linear/etc) | column?, method? (default linear) |
+| transform.chunk_rows | split dataset into fixed-size row chunks, adds _chunk_id column | chunk_size? (default 50) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
