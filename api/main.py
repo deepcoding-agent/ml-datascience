@@ -26,6 +26,7 @@ from api.routes.eda_report import router as eda_router
 from api.routes.insights import router as insights_router
 from api.routes.models import router as models_router
 from api.routes.prepare import router as prepare_router
+from api.routes.documents import router as documents_router
 from api.routes.suggest_target import router as suggest_router
 
 app = FastAPI(title="DS-Agent API", version="2.0.0")
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(auto_clean_router)
 app.include_router(auto_prepare_router)
 app.include_router(chat_router)
+app.include_router(documents_router)
 app.include_router(eda_router)
 app.include_router(insights_router)
 app.include_router(models_router)
