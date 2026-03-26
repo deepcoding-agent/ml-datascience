@@ -341,6 +341,7 @@ HANDLER_CATALOG = """\
 | nlp.text_remove_rare | remove words appearing below frequency threshold | column?, min_freq? (default 2) |
 | nlp.text_pos_patterns | detect POS-like surface patterns: all_caps/capitalized/numeric ratios | column? |
 | nlp.text_diversity_index | Simpson diversity index of words per document | column? |
+| nlp.translate | translate text column to another language (Google Translate) | column?, source? (default auto), target? (default en) |
 
 ### Analysis (smart, high-level — use for complex questions, comparisons, insights)
 | id | what it does | params |

@@ -49,6 +49,7 @@ from api.handlers.nlp.text_extract_numbers import handle_text_extract_numbers
 from api.handlers.nlp.text_remove_rare import handle_text_remove_rare
 from api.handlers.nlp.text_pos_patterns import handle_text_pos_patterns
 from api.handlers.nlp.text_diversity_index import handle_text_diversity_index
+from api.handlers.nlp.translate import handle_translate
 
 __all__ = [
     "handle_text_clean",
@@ -101,4 +102,5 @@ __all__ = [
     "handle_text_remove_rare",
     "handle_text_pos_patterns",
     "handle_text_diversity_index",
+    "handle_translate",
 ]

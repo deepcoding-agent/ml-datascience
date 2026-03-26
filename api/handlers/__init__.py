@@ -323,6 +323,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("nlp", "text_remove_rare"):       nlp.handle_text_remove_rare,
     ("nlp", "text_pos_patterns"):      nlp.handle_text_pos_patterns,
     ("nlp", "text_diversity_index"):   nlp.handle_text_diversity_index,
+    ("nlp", "translate"):              nlp.handle_translate,
 
     # Analysis (smart, high-level)
     ("analysis", "compare_extremes"):     analysis.handle_compare_extremes,
