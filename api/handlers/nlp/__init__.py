@@ -50,6 +50,11 @@ from api.handlers.nlp.text_remove_rare import handle_text_remove_rare
 from api.handlers.nlp.text_pos_patterns import handle_text_pos_patterns
 from api.handlers.nlp.text_diversity_index import handle_text_diversity_index
 from api.handlers.nlp.translate import handle_translate
+from api.handlers.nlp.named_entity_extract import handle_named_entity_extract
+from api.handlers.nlp.text_uppercase import handle_text_uppercase
+from api.handlers.nlp.text_lowercase import handle_text_lowercase
+from api.handlers.nlp.text_title_case import handle_text_title_case
+from api.handlers.nlp.text_pattern_match import handle_text_pattern_match
 
 __all__ = [
     "handle_text_clean",
@@ -103,4 +108,9 @@ __all__ = [
     "handle_text_pos_patterns",
     "handle_text_diversity_index",
     "handle_translate",
+    "handle_named_entity_extract",
+    "handle_text_uppercase",
+    "handle_text_lowercase",
+    "handle_text_title_case",
+    "handle_text_pattern_match",
 ]

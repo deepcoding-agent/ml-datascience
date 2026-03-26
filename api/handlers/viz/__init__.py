@@ -49,6 +49,11 @@ from api.handlers.viz.swarm_plot import handle_swarm_plot
 from api.handlers.viz.comparison_bar import handle_comparison_bar
 from api.handlers.viz.marimekko import handle_marimekko
 from api.handlers.viz.gauge_chart import handle_gauge_chart
+from api.handlers.viz.icicle_chart import handle_icicle_chart
+from api.handlers.viz.density_heatmap import handle_density_heatmap
+from api.handlers.viz.pie_subplots import handle_pie_subplots
+from api.handlers.viz.timeline_chart import handle_timeline_chart
+from api.handlers.viz.box_comparison import handle_box_comparison
 
 __all__ = [
     "handle_bar_chart",
@@ -101,4 +106,9 @@ __all__ = [
     "handle_comparison_bar",
     "handle_marimekko",
     "handle_gauge_chart",
+    "handle_icicle_chart",
+    "handle_density_heatmap",
+    "handle_pie_subplots",
+    "handle_timeline_chart",
+    "handle_box_comparison",
 ]

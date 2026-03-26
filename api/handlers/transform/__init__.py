@@ -50,6 +50,11 @@ from api.handlers.transform.duplicate_column import handle_duplicate_column
 from api.handlers.transform.fill_forward import handle_fill_forward
 from api.handlers.transform.interpolate_values import handle_interpolate_values
 from api.handlers.transform.chunk_rows import handle_chunk_rows
+from api.handlers.transform.conditional_column import handle_conditional_column
+from api.handlers.transform.datetime_parse import handle_datetime_parse
+from api.handlers.transform.datetime_format import handle_datetime_format
+from api.handlers.transform.cast_columns import handle_cast_columns
+from api.handlers.transform.string_slice import handle_string_slice
 
 __all__ = [
     "handle_filter",
@@ -103,4 +108,9 @@ __all__ = [
     "handle_fill_forward",
     "handle_interpolate_values",
     "handle_chunk_rows",
+    "handle_conditional_column",
+    "handle_datetime_parse",
+    "handle_datetime_format",
+    "handle_cast_columns",
+    "handle_string_slice",
 ]

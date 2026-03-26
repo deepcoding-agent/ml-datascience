@@ -49,6 +49,11 @@ from api.handlers.analysis.diminishing_returns import handle_diminishing_returns
 from api.handlers.analysis.categorical_target_crosstab import handle_categorical_target_crosstab
 from api.handlers.analysis.prediction_baseline import handle_prediction_baseline
 from api.handlers.analysis.data_readiness_score import handle_data_readiness_score
+from api.handlers.analysis.time_series_decompose import handle_time_series_decompose
+from api.handlers.analysis.lift_analysis import handle_lift_analysis
+from api.handlers.analysis.market_basket import handle_market_basket
+from api.handlers.analysis.granger_causality import handle_granger_causality
+from api.handlers.analysis.data_profiling_report import handle_data_profiling_report
 
 __all__ = [
     "handle_compare_extremes",
@@ -101,4 +106,9 @@ __all__ = [
     "handle_categorical_target_crosstab",
     "handle_prediction_baseline",
     "handle_data_readiness_score",
+    "handle_time_series_decompose",
+    "handle_lift_analysis",
+    "handle_market_basket",
+    "handle_granger_causality",
+    "handle_data_profiling_report",
 ]

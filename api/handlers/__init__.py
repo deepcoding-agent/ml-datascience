@@ -62,6 +62,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("stats", "sparsity_report"):   stats.handle_sparsity_report,
     ("stats", "data_sample"):       stats.handle_data_sample,
     ("stats", "normality_comprehensive"): stats.handle_normality_comprehensive,
+    ("stats", "covariance"):            stats.handle_covariance,
+    ("stats", "confidence_interval"):   stats.handle_confidence_interval,
+    ("stats", "cramers_v"):             stats.handle_cramers_v,
+    ("stats", "point_biserial"):        stats.handle_point_biserial,
+    ("stats", "levene_test"):           stats.handle_levene_test,
 
     # Clean
     ("clean", "drop_nulls"):        clean.handle_drop_nulls,
@@ -114,6 +119,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("clean", "dedup_keep_latest"):     clean.handle_dedup_keep_latest,
     ("clean", "fix_date_outliers"):     clean.handle_fix_date_outliers,
     ("clean", "clean_text_whitespace"): clean.handle_clean_text_whitespace,
+    ("clean", "coalesce_columns"):      clean.handle_coalesce_columns,
+    ("clean", "anonymize_column"):      clean.handle_anonymize_column,
+    ("clean", "parse_json_column"):     clean.handle_parse_json_column,
+    ("clean", "trim_text_length"):      clean.handle_trim_text_length,
+    ("clean", "round_to_nearest"):      clean.handle_round_to_nearest,
 
     # Transform
     ("transform", "filter"):         transform.handle_filter,
@@ -167,6 +177,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("transform", "fill_forward"):     transform.handle_fill_forward,
     ("transform", "interpolate_values"): transform.handle_interpolate_values,
     ("transform", "chunk_rows"):        transform.handle_chunk_rows,
+    ("transform", "conditional_column"): transform.handle_conditional_column,
+    ("transform", "datetime_parse"):    transform.handle_datetime_parse,
+    ("transform", "datetime_format"):   transform.handle_datetime_format,
+    ("transform", "cast_columns"):      transform.handle_cast_columns,
+    ("transform", "string_slice"):      transform.handle_string_slice,
 
     # Viz
     ("viz", "bar_chart"):          viz.handle_bar_chart,
@@ -219,6 +234,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("viz", "comparison_bar"):     viz.handle_comparison_bar,
     ("viz", "marimekko"):          viz.handle_marimekko,
     ("viz", "gauge_chart"):        viz.handle_gauge_chart,
+    ("viz", "icicle_chart"):       viz.handle_icicle_chart,
+    ("viz", "density_heatmap"):    viz.handle_density_heatmap,
+    ("viz", "pie_subplots"):       viz.handle_pie_subplots,
+    ("viz", "timeline_chart"):     viz.handle_timeline_chart,
+    ("viz", "box_comparison"):     viz.handle_box_comparison,
 
     # Feature
     ("feature", "feature_importance"):  feature.handle_feature_importance,
@@ -271,6 +291,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "boxcox_transform"):    feature.handle_boxcox_transform,
     ("feature", "yeo_johnson_transform"):feature.handle_yeo_johnson_transform,
     ("feature", "winsorize"):           feature.handle_winsorize,
+    ("feature", "svd_features"):        feature.handle_svd_features,
+    ("feature", "percentile_rank"):     feature.handle_percentile_rank,
+    ("feature", "string_length_features"): feature.handle_string_length_features,
+    ("feature", "cumulative_features"): feature.handle_cumulative_features,
+    ("feature", "woe_encode"):          feature.handle_woe_encode,
 
     # NLP / Text preprocessing
     ("nlp", "text_clean"):           nlp.handle_text_clean,
@@ -324,6 +349,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("nlp", "text_pos_patterns"):      nlp.handle_text_pos_patterns,
     ("nlp", "text_diversity_index"):   nlp.handle_text_diversity_index,
     ("nlp", "translate"):              nlp.handle_translate,
+    ("nlp", "named_entity_extract"):   nlp.handle_named_entity_extract,
+    ("nlp", "text_uppercase"):         nlp.handle_text_uppercase,
+    ("nlp", "text_lowercase"):         nlp.handle_text_lowercase,
+    ("nlp", "text_title_case"):        nlp.handle_text_title_case,
+    ("nlp", "text_pattern_match"):     nlp.handle_text_pattern_match,
 
     # Analysis (smart, high-level)
     ("analysis", "compare_extremes"):     analysis.handle_compare_extremes,
@@ -376,6 +406,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("analysis", "categorical_target_crosstab"): analysis.handle_categorical_target_crosstab,
     ("analysis", "prediction_baseline"):  analysis.handle_prediction_baseline,
     ("analysis", "data_readiness_score"): analysis.handle_data_readiness_score,
+    ("analysis", "time_series_decompose"): analysis.handle_time_series_decompose,
+    ("analysis", "lift_analysis"):      analysis.handle_lift_analysis,
+    ("analysis", "market_basket"):      analysis.handle_market_basket,
+    ("analysis", "granger_causality"):  analysis.handle_granger_causality,
+    ("analysis", "data_profiling_report"): analysis.handle_data_profiling_report,
 }
 
 

@@ -49,6 +49,11 @@ from api.handlers.feature.zscore_features import handle_zscore_features
 from api.handlers.feature.boxcox_transform import handle_boxcox_transform
 from api.handlers.feature.yeo_johnson_transform import handle_yeo_johnson_transform
 from api.handlers.feature.winsorize import handle_winsorize
+from api.handlers.feature.svd_features import handle_svd_features
+from api.handlers.feature.percentile_rank import handle_percentile_rank
+from api.handlers.feature.string_length_features import handle_string_length_features
+from api.handlers.feature.cumulative_features import handle_cumulative_features
+from api.handlers.feature.woe_encode import handle_woe_encode
 
 __all__ = [
     "handle_feature_importance",
@@ -101,4 +106,9 @@ __all__ = [
     "handle_boxcox_transform",
     "handle_yeo_johnson_transform",
     "handle_winsorize",
+    "handle_svd_features",
+    "handle_percentile_rank",
+    "handle_string_length_features",
+    "handle_cumulative_features",
+    "handle_woe_encode",
 ]

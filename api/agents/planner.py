@@ -73,6 +73,11 @@ HANDLER_CATALOG = """\
 | stats.sparsity_report | sparsity analysis (zeros + nulls per column) | (none) |
 | stats.data_sample | random sample with stats summary | n? (default 10) |
 | stats.normality_comprehensive | comprehensive normality: Shapiro + D'Agostino + Anderson-Darling | column? |
+| stats.covariance | compute covariance matrix between numeric columns | (none) |
+| stats.confidence_interval | confidence intervals for numeric columns | column?, confidence? (default 0.95) |
+| stats.cramers_v | Cramer's V association between categorical columns | (none) |
+| stats.point_biserial | point-biserial correlation between binary and numeric cols | (none) |
+| stats.levene_test | Levene's test for equality of variances across groups | column?, group? |
 
 ### Clean (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
@@ -127,6 +132,11 @@ HANDLER_CATALOG = """\
 | clean.dedup_keep_latest | dedup by column keeping latest by sort column | column (key), date_column (sort) |
 | clean.fix_date_outliers | remove/clip dates outside valid range | column, min_date?, max_date?, action? (remove/clip) |
 | clean.clean_text_whitespace | normalize all whitespace (double spaces, tabs, newlines) | column? |
+| clean.coalesce_columns | merge columns taking first non-null value per row | columns (list), new_name? |
+| clean.anonymize_column | hash/mask/redact a column for PII protection | column, method? (hash/mask/redact) |
+| clean.parse_json_column | parse JSON strings in a column into separate columns | column |
+| clean.trim_text_length | truncate text to max character length | column, max_length? (default 100) |
+| clean.round_to_nearest | round numeric values to nearest N (5, 10, 100, etc.) | column, nearest? (default 10) |
 
 ### Transform (modifies dataset → output_type MUST be "generate")
 | id | what it does | params |
@@ -182,6 +192,11 @@ HANDLER_CATALOG = """\
 | transform.fill_forward | forward-fill (ffill) nulls only | column? |
 | transform.interpolate_values | interpolate missing numeric values (linear/etc) | column?, method? (default linear) |
 | transform.chunk_rows | split dataset into fixed-size row chunks, adds _chunk_id column | chunk_size? (default 50) |
+| transform.conditional_column | create if/else column based on condition | column, operator, value, true_value?, false_value?, new_name? |
+| transform.datetime_parse | parse string column to datetime | column, format? |
+| transform.datetime_format | format datetime column to string | column, format? (default %Y-%m-%d), new_name? |
+| transform.cast_columns | cast column(s) to target dtype (int/float/str/bool/category) | column, dtype |
+| transform.string_slice | extract substring from text column by position | column, start?, end?, new_name? |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
@@ -233,6 +248,11 @@ HANDLER_CATALOG = """\
 | viz.comparison_bar | side-by-side comparison of 2 numeric cols | columns? (list: [a, b]) |
 | viz.marimekko | Marimekko/mosaic chart (variable-width bars) | columns? (list: [x, color]) |
 | viz.gauge_chart | single-value gauge chart | column?, agg? (mean/median/sum/min/max) |
+| viz.icicle_chart | icicle chart for hierarchical data | columns? (list of categorical cols) |
+| viz.density_heatmap | 2D density heatmap between two numeric columns | x?, y?, bins? (default 30) |
+| viz.pie_subplots | multiple pie charts side by side for categorical columns | columns? |
+| viz.timeline_chart | timeline/Gantt chart from start/end date columns | start?, end?, label? |
+| viz.box_comparison | side-by-side box plots comparing distributions | column?, group? |
 
 ### Feature Engineering
 | id | what it does | params |
@@ -287,6 +307,11 @@ HANDLER_CATALOG = """\
 | feature.boxcox_transform | Box-Cox transform (positive values only) | column? |
 | feature.yeo_johnson_transform | Yeo-Johnson transform (handles negatives) | column? |
 | feature.winsorize | cap extreme values at percentile bounds | column?, lower? (default 0.05), upper? (default 0.95) |
+| feature.svd_features | SVD dimensionality reduction (works with sparse data) | n_components? (default 3) |
+| feature.percentile_rank | add percentile rank (0-100) for numeric column(s) | column? |
+| feature.string_length_features | create char_len and word_count from string columns | column? |
+| feature.cumulative_features | add cumsum, cummean, cummax, cummin features | column |
+| feature.woe_encode | Weight of Evidence encoding (requires binary target) | column, target |
 
 ### NLP / Text Preprocessing (for text/language datasets → output_type "generate" unless noted)
 | id | what it does | params |
@@ -342,6 +367,11 @@ HANDLER_CATALOG = """\
 | nlp.text_pos_patterns | detect POS-like surface patterns: all_caps/capitalized/numeric ratios | column? |
 | nlp.text_diversity_index | Simpson diversity index of words per document | column? |
 | nlp.translate | translate text column to another language (Google Translate) | column?, source? (default auto), target? (default en) |
+| nlp.named_entity_extract | extract entities (email/url/phone/number/hashtag) from text | column?, entity? (default all) |
+| nlp.text_uppercase | convert text column to UPPERCASE | column? |
+| nlp.text_lowercase | convert text column to lowercase | column? |
+| nlp.text_title_case | convert text column to Title Case | column? |
+| nlp.text_pattern_match | filter rows where text matches regex pattern | column?, pattern |
 
 ### Analysis (smart, high-level — use for complex questions, comparisons, insights)
 | id | what it does | params |
@@ -396,6 +426,11 @@ HANDLER_CATALOG = """\
 | analysis.categorical_target_crosstab | crosstab heatmap of two categorical columns | column? (target), feature_column? |
 | analysis.prediction_baseline | compute naive prediction baselines (mean/mode) | column? (target) |
 | analysis.data_readiness_score | overall ML data readiness score (completeness, balance, size) | (none) |
+| analysis.time_series_decompose | decompose time series into trend + seasonal + residual | column?, period? |
+| analysis.lift_analysis | lift/gain analysis for score column vs binary target | column? (score), target? |
+| analysis.market_basket | association rule mining (support, confidence, lift) | group? (transaction), column? (item), min_support? |
+| analysis.granger_causality | Granger causality test between two time-ordered columns | column? (x), y?, max_lag? (default 4) |
+| analysis.data_profiling_report | comprehensive column-by-column data profiling | (none) |
 """
 
 PLANNER_PROMPT = """\

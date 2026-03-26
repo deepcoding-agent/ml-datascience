@@ -49,6 +49,11 @@ from api.handlers.clean.remove_rare_categories import handle_remove_rare_categor
 from api.handlers.clean.dedup_keep_latest import handle_dedup_keep_latest
 from api.handlers.clean.fix_date_outliers import handle_fix_date_outliers
 from api.handlers.clean.clean_text_whitespace import handle_clean_text_whitespace
+from api.handlers.clean.coalesce_columns import handle_coalesce_columns
+from api.handlers.clean.anonymize_column import handle_anonymize_column
+from api.handlers.clean.parse_json_column import handle_parse_json_column
+from api.handlers.clean.trim_text_length import handle_trim_text_length
+from api.handlers.clean.round_to_nearest import handle_round_to_nearest
 
 __all__ = [
     "handle_drop_nulls",
@@ -101,4 +106,9 @@ __all__ = [
     "handle_dedup_keep_latest",
     "handle_fix_date_outliers",
     "handle_clean_text_whitespace",
+    "handle_coalesce_columns",
+    "handle_anonymize_column",
+    "handle_parse_json_column",
+    "handle_trim_text_length",
+    "handle_round_to_nearest",
 ]

@@ -49,6 +49,11 @@ from api.handlers.stats.cluster_tendency import handle_cluster_tendency
 from api.handlers.stats.sparsity_report import handle_sparsity_report
 from api.handlers.stats.data_sample import handle_data_sample
 from api.handlers.stats.normality_comprehensive import handle_normality_comprehensive
+from api.handlers.stats.covariance import handle_covariance
+from api.handlers.stats.confidence_interval import handle_confidence_interval
+from api.handlers.stats.cramers_v import handle_cramers_v
+from api.handlers.stats.point_biserial import handle_point_biserial
+from api.handlers.stats.levene_test import handle_levene_test
 
 __all__ = [
     "handle_describe",
@@ -101,4 +106,9 @@ __all__ = [
     "handle_sparsity_report",
     "handle_data_sample",
     "handle_normality_comprehensive",
+    "handle_covariance",
+    "handle_confidence_interval",
+    "handle_cramers_v",
+    "handle_point_biserial",
+    "handle_levene_test",
 ]
