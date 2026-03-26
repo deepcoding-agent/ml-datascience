@@ -54,6 +54,9 @@ from api.handlers.analysis.lift_analysis import handle_lift_analysis
 from api.handlers.analysis.market_basket import handle_market_basket
 from api.handlers.analysis.granger_causality import handle_granger_causality
 from api.handlers.analysis.data_profiling_report import handle_data_profiling_report
+from api.handlers.analysis.dbscan_clustering import handle_dbscan_clustering
+from api.handlers.analysis.hierarchical_clustering import handle_hierarchical_clustering
+from api.handlers.analysis.stationarity_test import handle_stationarity_test
 
 __all__ = [
     "handle_compare_extremes",
@@ -111,4 +114,7 @@ __all__ = [
     "handle_market_basket",
     "handle_granger_causality",
     "handle_data_profiling_report",
+    "handle_dbscan_clustering",
+    "handle_hierarchical_clustering",
+    "handle_stationarity_test",
 ]

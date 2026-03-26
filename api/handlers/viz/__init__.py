@@ -54,6 +54,7 @@ from api.handlers.viz.density_heatmap import handle_density_heatmap
 from api.handlers.viz.pie_subplots import handle_pie_subplots
 from api.handlers.viz.timeline_chart import handle_timeline_chart
 from api.handlers.viz.box_comparison import handle_box_comparison
+from api.handlers.viz.slope_chart import handle_slope_chart
 
 __all__ = [
     "handle_bar_chart",
@@ -111,4 +112,5 @@ __all__ = [
     "handle_pie_subplots",
     "handle_timeline_chart",
     "handle_box_comparison",
+    "handle_slope_chart",
 ]

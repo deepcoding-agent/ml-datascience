@@ -55,6 +55,8 @@ from api.handlers.transform.datetime_parse import handle_datetime_parse
 from api.handlers.transform.datetime_format import handle_datetime_format
 from api.handlers.transform.cast_columns import handle_cast_columns
 from api.handlers.transform.string_slice import handle_string_slice
+from api.handlers.transform.date_diff import handle_date_diff
+from api.handlers.transform.row_number import handle_row_number
 
 __all__ = [
     "handle_filter",
@@ -113,4 +115,6 @@ __all__ = [
     "handle_datetime_format",
     "handle_cast_columns",
     "handle_string_slice",
+    "handle_date_diff",
+    "handle_row_number",
 ]

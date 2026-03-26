@@ -182,6 +182,8 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("transform", "datetime_format"):   transform.handle_datetime_format,
     ("transform", "cast_columns"):      transform.handle_cast_columns,
     ("transform", "string_slice"):      transform.handle_string_slice,
+    ("transform", "date_diff"):         transform.handle_date_diff,
+    ("transform", "row_number"):        transform.handle_row_number,
 
     # Viz
     ("viz", "bar_chart"):          viz.handle_bar_chart,
@@ -239,6 +241,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("viz", "pie_subplots"):       viz.handle_pie_subplots,
     ("viz", "timeline_chart"):     viz.handle_timeline_chart,
     ("viz", "box_comparison"):     viz.handle_box_comparison,
+    ("viz", "slope_chart"):        viz.handle_slope_chart,
 
     # Feature
     ("feature", "feature_importance"):  feature.handle_feature_importance,
@@ -411,6 +414,9 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("analysis", "market_basket"):      analysis.handle_market_basket,
     ("analysis", "granger_causality"):  analysis.handle_granger_causality,
     ("analysis", "data_profiling_report"): analysis.handle_data_profiling_report,
+    ("analysis", "dbscan_clustering"):   analysis.handle_dbscan_clustering,
+    ("analysis", "hierarchical_clustering"): analysis.handle_hierarchical_clustering,
+    ("analysis", "stationarity_test"):   analysis.handle_stationarity_test,
 }
 
 

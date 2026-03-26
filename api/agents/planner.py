@@ -197,6 +197,8 @@ HANDLER_CATALOG = """\
 | transform.datetime_format | format datetime column to string | column, format? (default %Y-%m-%d), new_name? |
 | transform.cast_columns | cast column(s) to target dtype (int/float/str/bool/category) | column, dtype |
 | transform.string_slice | extract substring from text column by position | column, start?, end?, new_name? |
+| transform.date_diff | calculate days/months/years between two date columns | column (start), column2 (end), unit? (days/months/years) |
+| transform.row_number | add sequential row number column | new_name? (default _row_number), start? (default 1) |
 
 ### Viz (charts only — output_type should be "query")
 | id | what it does | params |
@@ -253,6 +255,7 @@ HANDLER_CATALOG = """\
 | viz.pie_subplots | multiple pie charts side by side for categorical columns | columns? |
 | viz.timeline_chart | timeline/Gantt chart from start/end date columns | start?, end?, label? |
 | viz.box_comparison | side-by-side box plots comparing distributions | column?, group? |
+| viz.slope_chart | slope chart comparing two columns (before/after, changes) | column (left), column2 (right), label? |
 
 ### Feature Engineering
 | id | what it does | params |
@@ -431,6 +434,9 @@ HANDLER_CATALOG = """\
 | analysis.market_basket | association rule mining (support, confidence, lift) | group? (transaction), column? (item), min_support? |
 | analysis.granger_causality | Granger causality test between two time-ordered columns | column? (x), y?, max_lag? (default 4) |
 | analysis.data_profiling_report | comprehensive column-by-column data profiling | (none) |
+| analysis.dbscan_clustering | DBSCAN density-based clustering (finds arbitrary-shape clusters + noise) | eps? (default 0.5), min_samples? (default 5) |
+| analysis.hierarchical_clustering | agglomerative hierarchical clustering with dendrogram | n_clusters? (default 3), method? (ward/complete/average) |
+| analysis.stationarity_test | Augmented Dickey-Fuller test for time series stationarity | column? |
 """
 
 PLANNER_PROMPT = """\
