@@ -23,8 +23,9 @@ log = get_logger(__name__)
 # ── AI interpretation prompt ─────────────────────────────────────────────────
 
 INSIGHTS_PROMPT = """\
-You are an expert data analyst writing a dataset insights report.
-Given the analysis below, produce a structured JSON insights report.
+You are a senior data scientist auditing a dataset for a development team.
+Your job is to identify what this data CAN do, what its WEAKNESSES are,
+what needs to be FIXED before analysis, and what ANALYSES are worth pursuing.
 
 ## Dataset Analysis
 {analysis}
@@ -33,32 +34,40 @@ Given the analysis below, produce a structured JSON insights report.
 
 Return EXACTLY this structure:
 {{
-  "summary": "2-3 sentence executive summary of the dataset — what it appears to contain, its quality, and its readiness for analysis.",
+  "summary": "3-4 sentence overview: what this dataset contains, its readiness level, and the single most important thing to address before deeper analysis.",
   "data_quality_score": <integer 0-100>,
   "data_quality_label": "Excellent|Good|Fair|Poor",
   "highlights": [
     {{"icon": "star|warning|trend|link|target|bulb", "title": "short title", "detail": "1-2 sentence finding"}}
   ],
+  "weaknesses": [
+    {{"severity": "critical|warning|info", "title": "short title", "detail": "1-2 sentences explaining the issue and its impact on analysis", "fix": "concrete step to fix this"}}
+  ],
+  "possible_analyses": [
+    {{"title": "analysis name", "description": "what you'd learn from this analysis", "difficulty": "easy|medium|hard", "columns": ["col1", "col2"]}}
+  ],
+  "action_plan": [
+    {{"step": 1, "action": "what to do", "reason": "why this matters", "priority": "high|medium|low"}}
+  ],
   "recommendations": [
-    "actionable recommendation 1",
-    "actionable recommendation 2"
+    "actionable recommendation for data improvement"
   ],
   "interesting_columns": [
-    {{"column": "col_name", "reason": "why this column is interesting"}}
+    {{"column": "col_name", "reason": "why this column is interesting for analysis"}}
   ],
   "potential_targets": [
-    {{"column": "col_name", "reason": "why this could be a target variable", "task_type": "classification|regression"}}
+    {{"column": "col_name", "reason": "why this could be a prediction target", "task_type": "classification|regression"}}
   ]
 }}
 
 Rules:
-- highlights: 4-8 items, mix of positive findings and warnings
-- recommendations: 3-6 actionable items
-- interesting_columns: 3-5 most interesting columns
-- potential_targets: 1-3 columns that could be prediction targets
-- data_quality_score: 0-100 based on completeness, duplicates, type consistency, outliers
+- highlights: 4-8 items, mix of strengths and warnings
+- weaknesses: 3-6 items, ordered by severity (critical first). Include missing data, skewness, outliers, type issues, cardinality problems
+- possible_analyses: 3-6 concrete analyses the team should consider (clustering, regression, time series, A/B test, segmentation, etc.)
+- action_plan: 4-6 ordered steps to prepare this data for production analysis
 - Be specific: use actual column names, actual numbers, actual percentages
-- Write concisely — no filler words
+- Think like a tech lead reviewing data before a sprint
+- "fix" in weaknesses must be actionable (e.g., "fill with median", "drop column X", "encode as one-hot")
 """
 
 
@@ -288,7 +297,7 @@ def run_insights(
     ai_insights = None
 
     try:
-        llm = get_llm(temperature=0.1, max_tokens=2048, model_id=model_id)
+        llm = get_llm(temperature=0.1, max_tokens=4096, model_id=model_id)
         prompt = INSIGHTS_PROMPT.format(analysis=analysis_text)
         response = llm.invoke([HumanMessage(content=prompt)])
         raw = response.content.strip()
@@ -360,6 +369,18 @@ def _fallback_insights(analysis: dict, dataset_name: str) -> dict:
         "data_quality_score": score,
         "data_quality_label": label,
         "highlights": highlights,
+        "weaknesses": [
+            {"severity": "warning", "title": "Review needed", "detail": "Automated analysis only — AI interpretation unavailable.", "fix": "Re-run with API key configured."},
+        ],
+        "possible_analyses": [
+            {"title": "Descriptive Statistics", "description": "Explore distributions and summary stats for all columns.", "difficulty": "easy", "columns": []},
+            {"title": "Correlation Analysis", "description": "Find relationships between numeric features.", "difficulty": "easy", "columns": []},
+        ],
+        "action_plan": [
+            {"step": 1, "action": "Fix missing values", "reason": "Missing data can bias analysis results", "priority": "high"},
+            {"step": 2, "action": "Remove duplicate rows", "reason": "Duplicates inflate statistics", "priority": "medium"},
+            {"step": 3, "action": "Check data types", "reason": "Ensure columns are correctly typed for analysis", "priority": "medium"},
+        ],
         "recommendations": ["Review columns with missing values.", "Check for duplicate rows.", "Consider feature engineering on skewed columns."],
         "interesting_columns": [],
         "potential_targets": [],

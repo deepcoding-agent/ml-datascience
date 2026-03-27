@@ -48,34 +48,55 @@ def _style(fig: go.Figure, **kw) -> go.Figure:
 # ── AI prompt ────────────────────────────────────────────────────────────────
 
 DOCUMENT_PROMPT = """\
-You are a senior data scientist writing a comprehensive EDA (Exploratory Data Analysis) report document.
+You are a senior data scientist and business analyst writing a comprehensive data analysis report.
+This report will be used by business stakeholders to make decisions about marketing, promotions, and strategy.
 
 ## Dataset Analysis
 {analysis}
 
 ## Instructions
 Write a structured JSON document report. Each section should have clear, professional narrative text.
+Go BEYOND technical stats — explain what the data MEANS for business decisions.
 
 Return EXACTLY this JSON structure (no markdown fences):
 {{
-  "title": "EDA Report: <dataset name>",
-  "executive_summary": "3-4 sentence overview of the dataset, its purpose, quality, and key characteristics.",
-  "data_overview": "2-3 sentences describing dataset shape, column types, and memory usage.",
-  "quality_assessment": "3-4 sentences assessing data quality: completeness, duplicates, type consistency, and notable issues.",
-  "distribution_analysis": "3-4 sentences about numeric distributions, skewness, and noteworthy patterns.",
-  "correlation_analysis": "2-3 sentences about the strongest correlations and what they might mean.",
-  "missing_value_analysis": "2-3 sentences about missing data patterns and impact.",
-  "categorical_analysis": "2-3 sentences about categorical columns, their cardinality, and distribution.",
-  "outlier_analysis": "2-3 sentences about outliers detected and their potential impact.",
-  "recommendations": ["actionable item 1", "actionable item 2", "actionable item 3", "actionable item 4"],
-  "conclusion": "2-3 sentence concluding statement about dataset readiness and suggested next steps."
+  "title": "Data Analysis Report: <dataset name>",
+  "executive_summary": "4-5 sentence overview: what this dataset represents, key findings, data quality, and the most important business takeaway.",
+  "data_overview": "2-3 sentences describing dataset shape, column types, and what kind of data this appears to be (e.g., sales data, customer data, survey data).",
+  "quality_assessment": "3-4 sentences assessing data quality and its impact on analysis reliability.",
+  "distribution_analysis": "3-4 sentences about numeric distributions and what the patterns reveal about the underlying business/process.",
+  "correlation_analysis": "3-4 sentences about correlations and what causal or business relationships they might indicate. Explain why these relationships matter.",
+  "missing_value_analysis": "2-3 sentences about missing data patterns and business implications.",
+  "categorical_analysis": "2-3 sentences about categorical columns and what segments/groups they reveal.",
+  "outlier_analysis": "2-3 sentences about outliers — are they errors, or valuable edge cases (e.g., VIP customers, premium products)?",
+  "business_insights": "4-6 sentences: What story does this data tell? What trends, patterns, or segments are most valuable? What questions can this data answer for decision-makers?",
+  "use_cases": [
+    {{"title": "short title", "description": "1-2 sentences explaining how this data can be used for this specific purpose", "category": "marketing|sales|operations|product|finance|research"}},
+    {{"title": "short title", "description": "...", "category": "..."}}
+  ],
+  "market_analysis": "3-4 sentences: Based on the data patterns, what market insights can be drawn? What customer segments exist? What pricing or demand patterns are visible?",
+  "promotion_strategies": [
+    "Specific, actionable promotion or marketing strategy based on actual data patterns",
+    "Another strategy referencing actual columns and values"
+  ],
+  "recommendations": ["actionable item 1", "actionable item 2", "actionable item 3", "actionable item 4", "actionable item 5"],
+  "next_steps": [
+    "Concrete next step for deeper analysis",
+    "What additional data would strengthen the analysis",
+    "Suggested ML model or prediction task"
+  ],
+  "conclusion": "3-4 sentence concluding statement about the dataset's value, readiness, and strategic potential."
 }}
 
 Rules:
-- Be specific: use actual column names, actual numbers
-- Write in professional analytical tone
-- Focus on actionable insights, not just descriptions
-- Reference the charts that will accompany each section
+- Be specific: use actual column names, actual numbers, actual percentages
+- Write for business stakeholders, not just data scientists
+- Every insight should suggest an ACTION the reader can take
+- use_cases: provide 3-5 realistic use cases with practical descriptions
+- promotion_strategies: 3-5 strategies that reference actual data patterns (columns, segments, values)
+- market_analysis: infer market dynamics from the data patterns
+- next_steps: suggest concrete follow-up analyses or ML tasks
+- Think like a consultant presenting findings to a CEO
 """
 
 
@@ -406,7 +427,7 @@ def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> s
 def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """Use LLM to write narrative sections, fallback on failure."""
     try:
-        llm = get_llm(temperature=0.2, max_tokens=2048, model_id=model_id)
+        llm = get_llm(temperature=0.2, max_tokens=4096, model_id=model_id)
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
         response = llm.invoke([HumanMessage(content=prompt)])
         raw = response.content.strip()
@@ -420,20 +441,38 @@ def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -
     except Exception as e:
         log.error("Document: AI narrative failed (%s) — using fallback", e)
         return {
-            "title": f"EDA Report: {dataset_name}",
-            "executive_summary": f"This report provides a comprehensive analysis of the '{dataset_name}' dataset.",
-            "data_overview": "See the overview statistics and data type distribution chart below.",
-            "quality_assessment": "Review the completeness and duplicate metrics in the overview section.",
-            "distribution_analysis": "Numeric column distributions are shown in the histogram charts below.",
-            "correlation_analysis": "See the correlation heatmap for relationships between numeric features.",
+            "title": f"Data Analysis Report: {dataset_name}",
+            "executive_summary": f"This report provides a comprehensive analysis of the '{dataset_name}' dataset, covering data quality, distributions, correlations, and actionable business insights.",
+            "data_overview": "See the overview statistics and data type distribution chart below for a complete picture of the dataset structure.",
+            "quality_assessment": "Review the completeness and duplicate metrics in the overview section to assess data reliability.",
+            "distribution_analysis": "Numeric column distributions are shown in the histogram charts below, revealing patterns in the data.",
+            "correlation_analysis": "See the correlation heatmap for relationships between features that may indicate business drivers.",
             "missing_value_analysis": "Missing value patterns are visualized in the chart below.",
-            "categorical_analysis": "Categorical column distributions are shown in the bar charts.",
-            "outlier_analysis": "Box plots below show the outlier distribution across numeric features.",
+            "categorical_analysis": "Categorical column distributions reveal the key segments and groups in the data.",
+            "outlier_analysis": "Box plots below show outlier distribution — these may represent premium segments or data errors.",
+            "business_insights": "This dataset contains patterns that can inform business strategy. Review the distribution and correlation sections to identify key drivers and segments for targeted action.",
+            "use_cases": [
+                {"title": "Descriptive Analytics", "description": "Use this data to build dashboards and track key metrics over time.", "category": "operations"},
+                {"title": "Customer Segmentation", "description": "Segment records by categorical and numeric features to identify high-value groups.", "category": "marketing"},
+                {"title": "Predictive Modeling", "description": "Build ML models to predict key outcomes based on the available features.", "category": "research"},
+            ],
+            "market_analysis": "Review the categorical distributions and numeric patterns to understand market segments and demand drivers.",
+            "promotion_strategies": [
+                "Target the most frequent category segments with tailored promotions.",
+                "Use outlier analysis to identify premium or underserved segments for special offers.",
+                "Leverage correlation insights to bundle related products or features.",
+            ],
             "recommendations": [
-                "Review columns with high missing values.",
+                "Review columns with high missing values before analysis.",
                 "Check for and remove duplicate rows if appropriate.",
                 "Consider transformations for highly skewed columns.",
-                "Investigate strong correlations for potential feature redundancy.",
+                "Investigate strong correlations for business driver analysis.",
+                "Build segmentation models based on categorical features.",
+            ],
+            "next_steps": [
+                "Perform deeper segmentation analysis on key categorical columns.",
+                "Collect additional time-series data if trend analysis is needed.",
+                "Build a predictive model targeting the most relevant outcome column.",
             ],
             "conclusion": f"The '{dataset_name}' dataset has been profiled. Review the sections above for detailed findings.",
         }
