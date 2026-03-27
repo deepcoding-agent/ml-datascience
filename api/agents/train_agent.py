@@ -49,16 +49,42 @@ def _detect_task_type(
     y: pd.Series | None,
     user_task_type: str = "auto",
 ) -> str:
-    """Detect classification, regression, or clustering."""
+    """Detect classification, regression, or clustering.
+
+    Key insight: JSON deserialization often turns numeric columns into strings.
+    Always try numeric conversion before deciding based on dtype.
+    """
     if user_task_type != "auto":
         return user_task_type
     if y is None:
         return "clustering"
-    if y.dtype in ("object", "category", "bool"):
+
+    # Try to coerce object/string columns to numeric — JSON often stores numbers as strings
+    if y.dtype == "object":
+        coerced = pd.to_numeric(y, errors="coerce")
+        if coerced.notna().sum() / max(len(y), 1) > 0.8:
+            # Mostly numeric values stored as strings — treat as numeric
+            y = coerced
+
+    if y.dtype == "bool":
         return "classification"
+
     n_unique = y.nunique()
-    if n_unique <= 20 and n_unique / max(len(y), 1) < 0.05:
+    n_rows = max(len(y), 1)
+
+    # Many unique values relative to dataset size → regression
+    # e.g. price column with 200 unique values out of 545 rows
+    if n_unique > 20:
+        return "regression"
+
+    # Few unique values AND low cardinality ratio → classification
+    if n_unique <= 20 and n_unique / n_rows < 0.05:
         return "classification"
+
+    # Remaining object/category columns with ≤20 unique → classification
+    if y.dtype in ("object", "category"):
+        return "classification"
+
     return "regression"
 
 
@@ -75,6 +101,19 @@ def _auto_preprocess(
 
     X = df.drop(columns=[target_column], errors="ignore") if target_column else df.copy()
     y = df[target_column].copy() if target_column and target_column in df.columns else None
+
+    # Coerce string-encoded numbers back to numeric (JSON deserialization artifact)
+    if y is not None and y.dtype == "object":
+        coerced = pd.to_numeric(y, errors="coerce")
+        if coerced.notna().sum() / max(len(y), 1) > 0.8:
+            y = coerced
+            y = y.fillna(y.median())
+
+    # Coerce string-encoded numeric feature columns
+    for col in X.select_dtypes(include="object").columns:
+        coerced = pd.to_numeric(X[col], errors="coerce")
+        if coerced.notna().sum() / max(len(X), 1) > 0.8:
+            X[col] = coerced
 
     # Drop all-null columns
     null_cols = X.columns[X.isnull().all()].tolist()
@@ -113,12 +152,18 @@ def _auto_preprocess(
     scaler = StandardScaler()
     X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=feature_names, index=X.index)
 
-    # Train/test split
+    # Train/test split (fall back to non-stratified if classes have < 2 members)
     if y is not None:
         stratify = y if task_type == "classification" else None
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=test_size, random_state=42, stratify=stratify,
-        )
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y, test_size=test_size, random_state=42, stratify=stratify,
+            )
+        except ValueError:
+            log.warning("Stratified split failed (singleton classes) — falling back to random split")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y, test_size=test_size, random_state=42,
+            )
     else:
         X_train, X_test = X_scaled, X_scaled
         y_train, y_test = None, None
