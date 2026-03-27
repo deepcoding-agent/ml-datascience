@@ -54,6 +54,14 @@ from api.handlers.feature.percentile_rank import handle_percentile_rank
 from api.handlers.feature.string_length_features import handle_string_length_features
 from api.handlers.feature.cumulative_features import handle_cumulative_features
 from api.handlers.feature.woe_encode import handle_woe_encode
+from api.handlers.feature.rfe_select import handle_rfe_select
+from api.handlers.feature.mutual_info_select import handle_mutual_info_select
+from api.handlers.feature.variance_threshold import handle_variance_threshold
+from api.handlers.feature.correlation_select import handle_correlation_select
+from api.handlers.feature.boruta_select import handle_boruta_select
+from api.handlers.feature.rolling_window import handle_rolling_window
+from api.handlers.feature.expanding_window import handle_expanding_window
+from api.handlers.feature.seasonal_features import handle_seasonal_features
 
 __all__ = [
     "handle_feature_importance",
@@ -111,4 +119,12 @@ __all__ = [
     "handle_string_length_features",
     "handle_cumulative_features",
     "handle_woe_encode",
+    "handle_rfe_select",
+    "handle_mutual_info_select",
+    "handle_variance_threshold",
+    "handle_correlation_select",
+    "handle_boruta_select",
+    "handle_rolling_window",
+    "handle_expanding_window",
+    "handle_seasonal_features",
 ]

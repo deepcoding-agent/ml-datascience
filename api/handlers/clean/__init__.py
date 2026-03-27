@@ -54,6 +54,11 @@ from api.handlers.clean.anonymize_column import handle_anonymize_column
 from api.handlers.clean.parse_json_column import handle_parse_json_column
 from api.handlers.clean.trim_text_length import handle_trim_text_length
 from api.handlers.clean.round_to_nearest import handle_round_to_nearest
+from api.handlers.clean.smote_oversample import handle_smote_oversample
+from api.handlers.clean.random_oversample import handle_random_oversample
+from api.handlers.clean.random_undersample import handle_random_undersample
+from api.handlers.clean.adasyn_oversample import handle_adasyn_oversample
+from api.handlers.clean.auto_dtype_infer import handle_auto_dtype_infer
 
 __all__ = [
     "handle_drop_nulls",
@@ -111,4 +116,9 @@ __all__ = [
     "handle_parse_json_column",
     "handle_trim_text_length",
     "handle_round_to_nearest",
+    "handle_smote_oversample",
+    "handle_random_oversample",
+    "handle_random_undersample",
+    "handle_adasyn_oversample",
+    "handle_auto_dtype_infer",
 ]

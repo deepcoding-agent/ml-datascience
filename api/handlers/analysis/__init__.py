@@ -57,6 +57,10 @@ from api.handlers.analysis.data_profiling_report import handle_data_profiling_re
 from api.handlers.analysis.dbscan_clustering import handle_dbscan_clustering
 from api.handlers.analysis.hierarchical_clustering import handle_hierarchical_clustering
 from api.handlers.analysis.stationarity_test import handle_stationarity_test
+from api.handlers.analysis.imbalance_report import handle_imbalance_report
+from api.handlers.analysis.schema_validate import handle_schema_validate
+from api.handlers.analysis.data_drift_detect import handle_data_drift_detect
+from api.handlers.analysis.constraint_check import handle_constraint_check
 
 __all__ = [
     "handle_compare_extremes",
@@ -117,4 +121,8 @@ __all__ = [
     "handle_dbscan_clustering",
     "handle_hierarchical_clustering",
     "handle_stationarity_test",
+    "handle_imbalance_report",
+    "handle_schema_validate",
+    "handle_data_drift_detect",
+    "handle_constraint_check",
 ]
