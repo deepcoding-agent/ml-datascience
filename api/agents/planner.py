@@ -20,46 +20,46 @@ log = get_logger(__name__)
 
 HANDLER_CATALOG = """\
 ### Stats Summary (instant query — descriptive statistics, profiles, reports)
-| id | what it does | params |
-|----|-------------|--------|
-| stats.shape | row/column count, memory, duplicates | (none) |
-| stats.describe | full profile: dtype, nulls, mean/std/min/quartiles/max for numeric, top/freq for categorical | column? |
-| stats.null_report | null counts + percentages per column | (none) |
-| stats.dtypes | column data types, null%, unique counts | (none) |
-| stats.value_counts | top value frequencies for one column | column?, n? |
-| stats.unique_values | unique value count per column | (none) |
-| stats.skewness | skewness per numeric column | (none) |
-| stats.outlier_report | IQR-based outlier detection | (none) |
-| stats.duplicate_report | duplicate row count + sample | (none) |
-| stats.cross_tab | contingency table between 2 columns + heatmap | columns (list of 2), normalize? |
-| stats.percentile | custom percentile report (p1, p5, p10...p99) | column?, quantiles? |
-| stats.class_balance | target class distribution + balance check | column? |
-| stats.top_correlations | top N most correlated feature pairs | n? (default 10) |
-| stats.kurtosis | kurtosis per numeric column | (none) |
-| stats.zero_report | count zeros/empty values per column | (none) |
-| stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low) | (none) |
-| stats.mode_report | mode values per column | (none) |
-| stats.variance_report | variance per numeric column | (none) |
-| stats.range_report | range (max-min) per numeric column | (none) |
-| stats.iqr_report | interquartile range per numeric column | (none) |
-| stats.z_score_report | z-score analysis, flag extreme values | column? |
-| stats.frequency_table | frequency table with cumulative percentage | column? |
-| stats.coefficient_variation | coefficient of variation (CV) per numeric column | (none) |
-| stats.correlation_rank | Spearman rank correlation matrix + heatmap | (none) |
-| stats.entropy_report | Shannon entropy per column | (none) |
-| stats.gini_report | Gini impurity per categorical column | (none) |
-| stats.missing_pattern | which columns tend to be missing together | (none) |
-| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | column? |
-| stats.group_stats | descriptive stats per group (groupby + describe) | column? (group col), value_column? |
-| stats.column_compare | compare two columns statistically | columns (list of 2) |
-| stats.mutual_info_report | mutual information scores between features | column? (target) |
-| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | (none) |
-| stats.ratio_report | compute key ratios between numeric columns | (none) |
-| stats.top_bottom_values | top N and bottom N values of a column | column?, n? (default 5) |
-| stats.memory_report | detailed memory usage per column | (none) |
-| stats.sparsity_report | sparsity analysis (zeros + nulls per column) | (none) |
-| stats.data_sample | random sample with stats summary | n? (default 10) |
-| stats.class_weight_calc | calculate balanced class weights for ML training (sklearn-compatible) | column (target) |
+| id | what it does | output | params |
+|----|-------------|--------|--------|
+| stats.shape | row/column count, memory usage, duplicate count | table | (none) |
+| stats.describe | full profile: dtype, nulls, mean/std/min/quartiles/max per column | table | column? |
+| stats.null_report | null counts + percentages per column, sorted by severity | table | (none) |
+| stats.dtypes | column data types with null% and unique counts | table | (none) |
+| stats.value_counts | value frequencies + PERCENTAGE for one column — use for "กี่เปอร์เซ็นต์/how many percent/proportion" | table | column?, n? |
+| stats.unique_values | unique value count per column | table | (none) |
+| stats.skewness | skewness per numeric column (detects asymmetry) | table | (none) |
+| stats.outlier_report | IQR-based outlier detection with count per column | table | (none) |
+| stats.duplicate_report | duplicate row count + sample of duplicated rows | table | (none) |
+| stats.cross_tab | contingency table (crosstab) between 2 columns + heatmap chart | table+chart | columns (list of 2), normalize? |
+| stats.percentile | custom percentile report (p1, p5, p10...p99) | table | column?, quantiles? |
+| stats.class_balance | target class distribution + imbalance severity | table | column? |
+| stats.top_correlations | top N most correlated pairs with strength label | table | n? (default 10) |
+| stats.kurtosis | kurtosis per numeric column | table | (none) |
+| stats.zero_report | count zeros/empty values per column | table | (none) |
+| stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low cardinality) | table | (none) |
+| stats.mode_report | most frequent value per column | table | (none) |
+| stats.variance_report | variance per numeric column | table | (none) |
+| stats.range_report | range (max-min) per numeric column | table | (none) |
+| stats.iqr_report | interquartile range per numeric column | table | (none) |
+| stats.z_score_report | z-score analysis, flags extreme values (|z|>3) | table | column? |
+| stats.frequency_table | frequency table with cumulative percentage — use for "สัดส่วน/breakdown" | table | column? |
+| stats.coefficient_variation | coefficient of variation (CV) — compare spread across columns | table | (none) |
+| stats.correlation_rank | Spearman rank correlation matrix + heatmap chart | table+chart | (none) |
+| stats.entropy_report | Shannon entropy per column (measures randomness) | table | (none) |
+| stats.gini_report | Gini impurity per categorical column | table | (none) |
+| stats.missing_pattern | which columns tend to be missing together (co-occurrence) | table | (none) |
+| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | table | column? |
+| stats.group_stats | descriptive stats per group — use for "แต่ละกลุ่มมีค่า X เท่าไหร่" | table | column? (group col), value_column? |
+| stats.column_compare | compare two columns: mean, std, range, distribution | table | columns (list of 2) |
+| stats.mutual_info_report | mutual information scores — which features are most predictive | table | column? (target) |
+| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | table | (none) |
+| stats.ratio_report | compute key ratios between numeric columns | table | (none) |
+| stats.top_bottom_values | top N and bottom N values — use for "สูงสุด/ต่ำสุด/max/min" | table | column?, n? (default 5) |
+| stats.memory_report | detailed memory usage per column in KB/MB | table | (none) |
+| stats.sparsity_report | sparsity analysis (zeros + nulls percentage per column) | table | (none) |
+| stats.data_sample | random sample of N rows with basic stats | table | n? (default 10) |
+| stats.class_weight_calc | calculate balanced class weights for ML training (sklearn-compatible) | table | column (target) |
 
 ### Stats Test (statistical tests, hypothesis testing, correlation)
 | id | what it does | params |
@@ -423,17 +423,17 @@ HANDLER_CATALOG = """\
 | nlp.named_entity_extract | extract entities (email/url/phone/number/hashtag) from text | column?, entity? (default all) |
 
 ### Analysis Explore (EDA, profiling, quality, trends, comparisons)
-| id | what it does | params |
-|----|-------------|--------|
-| analysis.compare_extremes | compare rows with highest vs lowest value — side-by-side table + chart | column? (numeric col to compare by) |
-| analysis.deep_profile | deep statistical profile of a column: distribution, outliers, quartiles, chart | column? |
-| analysis.group_insights | compare stats across groups of a categorical column + box plot | column? (group col), value_column? (numeric) |
-| analysis.data_quality | comprehensive data quality scores per column + overall score + chart | (none) |
-| analysis.correlation_insights | find top correlations with explanation + scatter plots | n? (default 10) |
-| analysis.compare_columns | side-by-side comparison of two columns: stats + overlapping histogram | columns (list of 2) |
-| analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
-| analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
-| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
+| id | what it does | output | params |
+|----|-------------|--------|--------|
+| analysis.compare_extremes | compare rows with max vs min value — use for "ถูกสุดกับแพงสุดต่างกันยังไง/cheapest vs most expensive" | table+chart | column? (numeric col to compare by) |
+| analysis.deep_profile | deep statistical profile of one column: distribution, outliers, quartiles | table+chart | column? |
+| analysis.group_insights | compare stats across groups — use for "แต่ละกลุ่มเป็นยังไง/compare by category" | table+chart | column? (group col), value_column? (numeric) |
+| analysis.data_quality | comprehensive data quality scores per column + overall score | table+chart | (none) |
+| analysis.correlation_insights | find top correlations with explanation + scatter plots | table+chart | n? (default 10) |
+| analysis.compare_columns | side-by-side comparison of two columns: stats + histogram | table+chart | columns (list of 2) |
+| analysis.trend_detect | detect trends: direction, slope, moving average | table+chart | column?, window? (default 5) |
+| analysis.segment_analysis | auto-segment into quantile groups and describe each | table | column?, n? (segments, default 4) |
+| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | table | (none) |
 | analysis.distribution_analysis | distribution shape analysis (skew, kurtosis, normality) per numeric col | (none) |
 | analysis.missing_value_analysis | deep missing value pattern analysis (co-occurrence, MCAR hint) | (none) |
 | analysis.categorical_analysis | deep analysis of all categorical columns (cardinality, mode, entropy) | (none) |
