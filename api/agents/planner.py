@@ -671,13 +671,14 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 # ── Stage 1: Sub-category router ────────────────────────────────────────────
 
 ROUTER_PROMPT = """\
-Classify this user message into 1-3 handler sub-categories for a data-science agent.
+You are a router for a data-science agent. A dataset is loaded with columns: {columns}
 
-User: "{user_message}"
-Columns: {columns}
+User message: "{user_message}"
 
-Sub-categories (pick from these):
-- stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory
+Your job: classify into 1-3 handler sub-categories.
+
+Sub-categories:
+- stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory, compare rows, min/max, cheapest/most expensive, top/bottom
 - stats_test: correlation, normality test, chi2, t-test, ANOVA, KS test, hypothesis, confidence interval
 - clean_values: fill nulls, replace values, clip/remove outliers, SMOTE/oversample/undersample, imputation
 - clean_structure: remove duplicates, drop columns, fix types, rename, standardize, anonymize, PII
@@ -691,16 +692,22 @@ Sub-categories (pick from these):
 - nlp_extract: TF-IDF, sentiment, word frequency, NER, ngrams, similarity, keyword extract, analysis
 - analysis_explore: EDA, data quality, profiling, trends, segments, comparisons, drift, completeness
 - analysis_model: clustering, anomaly detection, A/B test, regression, hypothesis test, time series, PCA
-- direct_answer: NOT about the dataset — general knowledge, casual chat, math, coding help
 
-Rules:
-- Pick 1 sub-category for simple requests ("show nulls" → stats_summary)
-- Pick 2-3 when request spans multiple operations ("SMOTE then select features" → clean_values, feature_select)
-- If user says "then"/"and"/"แล้วก็" → likely multi-category
-- direct_answer: only for questions completely unrelated to the data
+IMPORTANT — direct_answer rules:
+- direct_answer=true ONLY when the question has ZERO connection to the loaded dataset
+- Examples of direct_answer=true: "what is Python?", "tell me a joke", "who made you?"
+- Examples of direct_answer=FALSE (must route to handlers):
+  - "what is the most expensive?" → stats_summary (even without saying column name — it's about the data)
+  - "compare the cheapest and most expensive" → stats_summary, analysis_explore
+  - "how are they different?" → analysis_explore (refers to data rows)
+  - "show me a chart" → viz_basic
+  - "บ้านราคาถูกสุดกับแพงที่สุดต่างกันยังไง" → stats_summary, analysis_explore
+  - "สรุปข้อมูลให้หน่อย" → stats_summary
+  - "ข้อมูลมี outlier ไหม" → stats_summary, clean_values
+  - ANY question that could be answered by looking at the data → NOT direct_answer
 
 Output ONLY JSON: {{"categories": ["sub_cat1"], "direct_answer": false}}
-Or: {{"categories": [], "direct_answer": true}}"""
+Or for truly unrelated questions: {{"categories": [], "direct_answer": true}}"""
 
 
 def _split_catalog_by_category() -> dict[str, str]:
@@ -757,6 +764,33 @@ def _get_catalog_sections() -> dict[str, str]:
     if not _CATALOG_SECTIONS:
         _CATALOG_SECTIONS = _split_catalog_by_category()
     return _CATALOG_SECTIONS
+
+
+def _verify_direct_answer(
+    user_message: str, columns: list[str], model_id: str | None,
+) -> bool:
+    """AI verification: is this question truly unrelated to the loaded dataset?
+
+    Called only when router says direct_answer=true but data is loaded.
+    Returns True if the question IS about the data (should NOT be direct_answer).
+    Uses max_tokens=10 — expects just YES or NO.
+    """
+    from api.llm import get_llm
+
+    prompt = (
+        f'Dataset columns: {", ".join(columns[:15])}\n'
+        f'Question: "{user_message}"\n\n'
+        f"Could this question be answered by looking at or analyzing the dataset? YES or NO"
+    )
+    try:
+        llm = get_llm(temperature=0.0, max_tokens=10, model_id=model_id)
+        answer = llm.invoke(prompt).content.strip().upper()
+        is_about_data = answer.startswith("YES")
+        log.info("  verify direct_answer → question about data? %s", is_about_data)
+        return is_about_data
+    except Exception as e:
+        log.warning("  verify direct_answer failed (%s) → assuming about data", e)
+        return True
 
 
 def _route_categories(
@@ -842,18 +876,33 @@ def plan_steps(
     # Extract column names for router
     col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
     columns = col_match[:15] if col_match else []
+    has_data = bool(columns) and bool(df_context.strip())
 
     # Stage 1: Route (lightweight, ~200 tokens)
     categories, is_direct = _route_categories(user_message, columns, model_id)
 
+    # Stage 1.5: If router says direct_answer but data is loaded,
+    # verify with a second AI call — is the question really unrelated?
+    if is_direct and has_data:
+        is_about_data = _verify_direct_answer(user_message, columns, model_id)
+        if is_about_data:
+            log.info("  router said direct_answer but AI verification says it's about data → overriding")
+            categories = ["stats_summary", "analysis_explore"]
+            is_direct = False
+
     if is_direct:
-        log.info("  router → direct_answer")
+        log.info("  router → direct_answer (verified: not about data)")
         return {
             "understanding": "Not about the dataset",
             "output_type": "text",
             "direct_answer": True,
             "steps": [],
         }
+
+    # If router returned empty categories (parse failure), use broad fallback
+    if not categories:
+        log.info("  router returned empty categories → broad fallback")
+        categories = ["stats_summary", "analysis_explore", "viz_basic"]
 
     # Stage 2: Build focused catalog and plan
     focused_catalog = _build_focused_catalog(categories)
