@@ -620,6 +620,13 @@ or refers to something from a previous message:
 3. Use THAT column — do NOT pick a random default column
 Example: if history says "parking value counts" and user says "plot it" → use column="parking"
 
+### Percentage / proportion questions — ALWAYS use stats.value_counts
+When the user asks "how many percent?", "percentage", "proportion", "สัดส่วน", "เปอร์เซ็นต์", "กี่เปอร์เซ็น":
+- Use `stats.value_counts` with the relevant column → it automatically calculates count AND percentage
+- Do NOT use codegen for simple percentage calculations
+- Example: "ห้องนอนแต่ละแบบกี่เปอร์เซ็นต์" → stats.value_counts with column="bedrooms"
+- stats.value_counts already returns: column, count, percentage (count/total*100)
+
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Use as many steps as needed to fully answer the request. 1 step for simple tasks, more for complex ones — no upper limit.
@@ -633,6 +640,7 @@ Example: if history says "parking value counts" and user says "plot it" → use 
 10. For "correlation heatmap" → viz.heatmap
 11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
 12. For multi-step requests ("clean then show chart"), create multiple steps spanning categories.
+13. For "percentage" / "เปอร์เซ็นต์" / "สัดส่วน" of a column → stats.value_counts (already includes percentage)
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
 
@@ -659,6 +667,9 @@ User: "fill missing values with median"
 
 User: "show bar chart of bedroom counts"
 {{"understanding":"Bar chart of bedroom distribution","output_type":"query","steps":[{{"step_num":1,"description":"Bar chart of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"BedroomAbvGr"}}}}}}]}}
+
+User: "คิดเป็นอย่างละกี่เปอร์เซ็นต์" (follow-up to a column count)
+{{"understanding":"Calculate percentage for each category","output_type":"query","steps":[{{"step_num":1,"description":"Value counts with percentage","handler":{{"id":"stats.value_counts","params":{{"column":"bedrooms"}}}}}}]}}
 
 User: "correlation heatmap"
 {{"understanding":"Show correlation heatmap","output_type":"query","steps":[{{"step_num":1,"description":"Correlation heatmap","handler":{{"id":"viz.heatmap","params":{{}}}}}}]}}
