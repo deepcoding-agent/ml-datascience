@@ -692,7 +692,7 @@ You are a router for a data-science agent. A dataset is loaded with columns: {co
 
 User message: "{user_message}"
 
-Your job: classify into 1-3 handler sub-categories.
+Your job: classify into 1-5 handler sub-categories. Pick MORE categories when the request is complex or could span multiple areas.
 
 Sub-categories:
 - stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory, compare rows, min/max, cheapest/most expensive, top/bottom
@@ -723,7 +723,13 @@ IMPORTANT — direct_answer rules:
   - "ข้อมูลมี outlier ไหม" → stats_summary, clean_values
   - ANY question that could be answered by looking at the data → NOT direct_answer
 
-Output ONLY JSON: {{"categories": ["sub_cat1"], "direct_answer": false}}
+Guidelines for number of categories:
+- Simple question ("show nulls") → 1-2 categories
+- Analytical question ("compare cheapest vs most expensive") → 2-3 categories
+- Complex request ("clean, calculate percentages, then show chart") → 3-5 categories
+- When in doubt, include more — the planner can ignore irrelevant handlers
+
+Output ONLY JSON: {{"categories": ["sub_cat1", "sub_cat2"], "direct_answer": false}}
 Or for truly unrelated questions: {{"categories": [], "direct_answer": true}}"""
 
 
@@ -841,7 +847,7 @@ def _route_categories(
             "nlp_process", "nlp_extract",
             "analysis_explore", "analysis_model",
         }
-        categories = [c for c in categories if c in valid_cats][:3]
+        categories = [c for c in categories if c in valid_cats][:5]
 
         log.info("  router → categories=%s, direct_answer=%s", categories, direct)
         return categories, bool(direct)
