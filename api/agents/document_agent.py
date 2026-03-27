@@ -48,55 +48,67 @@ def _style(fig: go.Figure, **kw) -> go.Figure:
 # ── AI prompt ────────────────────────────────────────────────────────────────
 
 DOCUMENT_PROMPT = """\
-You are a senior data scientist and business analyst writing a comprehensive data analysis report.
-This report will be used by business stakeholders to make decisions about marketing, promotions, and strategy.
+You are a business intelligence consultant presenting findings to a CEO.
+Your job: turn raw data analysis into ACTIONABLE BUSINESS INTELLIGENCE.
 
 ## Dataset Analysis
 {analysis}
 
 ## Instructions
-Write a structured JSON document report. Each section should have clear, professional narrative text.
-Go BEYOND technical stats — explain what the data MEANS for business decisions.
+Write a JSON report that a non-technical executive can read and immediately act on.
+Focus on: revenue impact, cost savings, customer insights, market opportunities, and risk areas.
+Use actual numbers from the analysis. Every insight must suggest a concrete action.
 
-Return EXACTLY this JSON structure (no markdown fences):
+IMPORTANT: Respond in the same language as the column names suggest.
+If columns look Thai (ราคา, ชื่อ, etc.) → write in Thai.
+If columns look English (price, name, etc.) → write in English.
+Mixed → write in the dominant language.
+
+Return EXACTLY this JSON (no markdown fences):
 {{
-  "title": "Data Analysis Report: <dataset name>",
-  "executive_summary": "4-5 sentence overview: what this dataset represents, key findings, data quality, and the most important business takeaway.",
-  "data_overview": "2-3 sentences describing dataset shape, column types, and what kind of data this appears to be (e.g., sales data, customer data, survey data).",
-  "quality_assessment": "3-4 sentences assessing data quality and its impact on analysis reliability.",
-  "distribution_analysis": "3-4 sentences about numeric distributions and what the patterns reveal about the underlying business/process.",
-  "correlation_analysis": "3-4 sentences about correlations and what causal or business relationships they might indicate. Explain why these relationships matter.",
-  "missing_value_analysis": "2-3 sentences about missing data patterns and business implications.",
-  "categorical_analysis": "2-3 sentences about categorical columns and what segments/groups they reveal.",
-  "outlier_analysis": "2-3 sentences about outliers — are they errors, or valuable edge cases (e.g., VIP customers, premium products)?",
-  "business_insights": "4-6 sentences: What story does this data tell? What trends, patterns, or segments are most valuable? What questions can this data answer for decision-makers?",
+  "title": "Business Intelligence Report: <dataset name>",
+  "executive_summary": "5-6 sentences: What is this data? What are the 3 most important findings? What is the #1 action item? Frame everything in business value (revenue, cost, customers, growth).",
+  "data_overview": "2-3 sentences: What kind of business data is this? How many records? What business dimensions does it cover?",
+  "quality_assessment": "3-4 sentences: Is this data trustworthy for decision-making? What data gaps could lead to wrong decisions? Rate: Ready/Needs Cleaning/Unreliable.",
+  "distribution_analysis": "4-5 sentences: What do the numbers tell us about the business? Are there concentrations (e.g., 80% of revenue from 20% of products)? Price ranges? Volume patterns? Translate every stat into a business implication.",
+  "correlation_analysis": "4-5 sentences: What drives what? If X goes up, does Y go up? Which factors most influence the key business metrics? What levers can the business pull?",
+  "missing_value_analysis": "2-3 sentences: Are there data collection gaps? Could missing data cause blind spots in decision-making?",
+  "categorical_analysis": "3-4 sentences: What segments exist? Which segments are largest/most profitable? Are there underserved segments with growth potential?",
+  "outlier_analysis": "3-4 sentences: Are outliers premium opportunities (VIP customers, luxury products) or problems (errors, fraud)? What special handling do they need?",
+  "business_insights": "6-8 sentences: The KEY section. Write like a consultant briefing the CEO. What story does the data tell? What are the top 3 strategic insights? What competitive advantages can be derived? What risks should leadership be aware of?",
   "use_cases": [
-    {{"title": "short title", "description": "1-2 sentences explaining how this data can be used for this specific purpose", "category": "marketing|sales|operations|product|finance|research"}},
-    {{"title": "short title", "description": "...", "category": "..."}}
+    {{"title": "specific use case", "description": "2-3 sentences: exactly how to use this data to generate revenue, reduce cost, or improve operations. Include which columns and what analysis.", "category": "marketing|sales|operations|product|finance|research"}},
+    {{"title": "...", "description": "...", "category": "..."}}
   ],
-  "market_analysis": "3-4 sentences: Based on the data patterns, what market insights can be drawn? What customer segments exist? What pricing or demand patterns are visible?",
+  "market_analysis": "4-5 sentences: What does the data reveal about the market? Customer segments? Price sensitivity? Demand patterns? Competitive positioning? Geographic or demographic trends?",
   "promotion_strategies": [
-    "Specific, actionable promotion or marketing strategy based on actual data patterns",
-    "Another strategy referencing actual columns and values"
+    "Strategy 1: Reference specific segments/values from the data. e.g., 'Target the 95 properties with 4+ bedrooms (17% of inventory) with premium staging services — they average 45% higher prices'",
+    "Strategy 2: Another data-driven strategy with specific numbers",
+    "Strategy 3: ..."
   ],
-  "recommendations": ["actionable item 1", "actionable item 2", "actionable item 3", "actionable item 4", "actionable item 5"],
+  "recommendations": [
+    "Priority 1 (Quick Win): Something achievable in 1-2 weeks with clear ROI",
+    "Priority 2 (Short-term): 1-3 month initiative",
+    "Priority 3 (Strategic): Longer-term data infrastructure or capability",
+    "Priority 4: ...",
+    "Priority 5: ..."
+  ],
   "next_steps": [
-    "Concrete next step for deeper analysis",
-    "What additional data would strengthen the analysis",
-    "Suggested ML model or prediction task"
+    "Immediate: What analysis should be done next to validate these findings",
+    "Data gap: What additional data would unlock more value",
+    "ML opportunity: What prediction or classification could automate decisions"
   ],
-  "conclusion": "3-4 sentence concluding statement about the dataset's value, readiness, and strategic potential."
+  "conclusion": "3-4 sentences: Bottom line for the CEO. What is the strategic value of this data? What decision should be made today?"
 }}
 
 Rules:
-- Be specific: use actual column names, actual numbers, actual percentages
-- Write for business stakeholders, not just data scientists
-- Every insight should suggest an ACTION the reader can take
-- use_cases: provide 3-5 realistic use cases with practical descriptions
-- promotion_strategies: 3-5 strategies that reference actual data patterns (columns, segments, values)
-- market_analysis: infer market dynamics from the data patterns
-- next_steps: suggest concrete follow-up analyses or ML tasks
-- Think like a consultant presenting findings to a CEO
+- Use ACTUAL column names, numbers, and percentages from the analysis
+- Frame everything as business impact: revenue, cost, customers, growth, risk
+- Every recommendation must be actionable — who does what by when
+- use_cases: 4-6 realistic use cases with ROI potential
+- promotion_strategies: 3-5 strategies with SPECIFIC numbers from the data
+- Think like McKinsey presenting to a Fortune 500 CEO
+- NO vague platitudes — every sentence must reference specific data
 """
 
 
