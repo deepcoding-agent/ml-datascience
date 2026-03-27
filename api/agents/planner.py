@@ -690,9 +690,13 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 ROUTER_PROMPT = """\
 You are a router for a data-science agent. A dataset is loaded with columns: {columns}
 
-User message: "{user_message}"
+Recent conversation:
+{history_summary}
+
+Current user message: "{user_message}"
 
 Your job: classify into 1-5 handler sub-categories. Pick MORE categories when the request is complex or could span multiple areas.
+Use the conversation history to understand follow-up questions (e.g. "show percentage" after a count table → stats_summary + transform_reshape).
 
 Sub-categories:
 - stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory, compare rows, min/max, cheapest/most expensive, top/bottom
@@ -818,13 +822,26 @@ def _verify_direct_answer(
 
 def _route_categories(
     user_message: str, columns: list[str], model_id: str | None,
+    history: list | None = None,
 ) -> tuple[list[str], bool]:
     """Stage 1: Lightweight LLM call to classify intent into sub-categories."""
     from api.llm import get_llm
 
+    # Build short history summary for router context (last 3 messages, 150 chars each)
+    history_lines = []
+    if history:
+        for msg in history[-3:]:
+            role = msg.role if hasattr(msg, "role") else msg.get("role", "?")
+            content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+            if len(content) > 150:
+                content = content[:150] + "..."
+            history_lines.append(f"{role}: {content}")
+    history_summary = "\n".join(history_lines) if history_lines else "(no previous messages)"
+
     prompt = ROUTER_PROMPT.format(
         user_message=user_message,
         columns=", ".join(columns[:15]),
+        history_summary=history_summary,
     )
 
     try:
@@ -902,7 +919,7 @@ def plan_steps(
     has_data = bool(columns) and bool(df_context.strip())
 
     # Stage 1: Route (lightweight, ~200 tokens)
-    categories, is_direct = _route_categories(user_message, columns, model_id)
+    categories, is_direct = _route_categories(user_message, columns, model_id, history)
 
     # Stage 1.5: If router says direct_answer but data is loaded,
     # verify with a second AI call — is the question really unrelated?
