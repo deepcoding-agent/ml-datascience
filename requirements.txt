@@ -166,3 +166,5 @@ zipp==3.23.0
 zstandard==0.25.0
 imbalanced-learn>=0.12
 boruta>=0.3
+lightgbm>=4.0
+optuna>=3.6
