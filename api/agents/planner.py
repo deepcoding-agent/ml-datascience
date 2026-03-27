@@ -706,80 +706,65 @@ Recent conversation:
 
 Current user message: "{user_message}"
 
-Your job: classify into 1-5 handler sub-categories. Pick MORE categories when the request is complex or could span multiple areas.
-Use the conversation history to understand follow-up questions (e.g. "show percentage" after a count table → stats_summary + transform_reshape).
+Your job: classify into 1-3 handler categories.
+Use conversation history to understand follow-up questions.
 
-Sub-categories:
-- stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory, compare rows, min/max, cheapest/most expensive, top/bottom
-- stats_test: correlation, normality test, chi2, t-test, ANOVA, KS test, hypothesis, confidence interval
-- clean_values: fill nulls, replace values, clip/remove outliers, SMOTE/oversample/undersample, imputation
-- clean_structure: remove duplicates, drop columns, fix types, rename, standardize, anonymize, PII
-- transform_reshape: filter, sort, group, pivot, merge, reshape, add column, conditional
-- transform_encode: encode (label/onehot/ordinal), scale, bin, cast dtype, datetime, sample, split
-- viz_basic: bar, pie, line, scatter, histogram, count, heatmap, donut, area, bubble
-- viz_advanced: box, violin, treemap, sankey, waterfall, radar, funnel, QQ, density, distribution
-- feature_create: create new features: lag, rolling, datetime, interaction, polynomial, text, encode
-- feature_select: select/rank features: PCA, RFE, Boruta, importance, mutual info; transform: log, sqrt, boxcox
-- nlp_process: text clean, tokenize, stopwords, normalize, translate, dedup, mask PII, augment
-- nlp_extract: TF-IDF, sentiment, word frequency, NER, ngrams, similarity, keyword extract, analysis
-- analysis_explore: EDA, data quality, profiling, trends, segments, comparisons, drift, completeness
-- analysis_model: clustering, anomaly detection, A/B test, regression, hypothesis test, time series, PCA
+Categories (pick from these 7):
+- stats: describe, shape, nulls, value counts, correlation, hypothesis tests, chi2, ANOVA, t-test, compare, min/max, percentage, proportion, class balance
+- clean: fill nulls, remove duplicates, drop columns, fix types, SMOTE, oversample, undersample, clip outliers, rename, anonymize
+- transform: filter, sort, group, pivot, merge, encode, scale, bin, cast dtype, datetime, sample, split, reshape
+- viz: bar, pie, line, scatter, histogram, heatmap, box, violin, treemap, sankey, waterfall, radar, distribution, any chart/plot/graph
+- feature: create features (lag, rolling, interaction, polynomial), select features (PCA, RFE, Boruta, mutual info, variance)
+- nlp: text clean, tokenize, stopwords, translate, TF-IDF, sentiment, NER, word frequency, ngrams, keyword extract
+- analysis: EDA, data quality, profiling, trends, comparisons, clustering, anomaly detection, drift, segment, outlier analysis
 
 IMPORTANT — direct_answer rules:
 - direct_answer=true ONLY when the question has ZERO connection to the loaded dataset
-- Examples of direct_answer=true: "what is Python?", "tell me a joke", "who made you?"
-- Examples of direct_answer=FALSE (must route to handlers):
-  - "what is the most expensive?" → stats_summary (even without saying column name — it's about the data)
-  - "compare the cheapest and most expensive" → stats_summary, analysis_explore
-  - "how are they different?" → analysis_explore (refers to data rows)
-  - "show me a chart" → viz_basic
-  - "บ้านราคาถูกสุดกับแพงที่สุดต่างกันยังไง" → stats_summary, analysis_explore
-  - "สรุปข้อมูลให้หน่อย" → stats_summary
-  - "ข้อมูลมี outlier ไหม" → stats_summary, clean_values
-  - ANY question that could be answered by looking at the data → NOT direct_answer
+- Examples: "what is Python?" → direct_answer. "who made you?" → direct_answer
+- If the question could be answered by looking at the data → NOT direct_answer
+- "บ้านราคาถูกสุดกับแพงที่สุดต่างกันยังไง" → stats, analysis (about the data!)
+- "คิดเป็นเปอร์เซ็นต์" → stats (percentage of data values)
+- When in doubt with dataset loaded → route to handlers, never direct_answer
 
-Guidelines for number of categories:
-- Simple question ("show nulls") → 1-2 categories
-- Analytical question ("compare cheapest vs most expensive") → 2-3 categories
-- Complex request ("clean, calculate percentages, then show chart") → 3-5 categories
-- When in doubt, include more — the planner can ignore irrelevant handlers
-
-Output ONLY JSON: {{"categories": ["sub_cat1", "sub_cat2"], "direct_answer": false}}
-Or for truly unrelated questions: {{"categories": [], "direct_answer": true}}"""
+Output ONLY JSON: {{"categories": ["cat1"], "direct_answer": false}}
+Or: {{"categories": [], "direct_answer": true}}"""
 
 
 def _split_catalog_by_category() -> dict[str, str]:
-    """Split HANDLER_CATALOG into per-sub-category sections."""
-    sections: dict[str, str] = {}
+    """Split HANDLER_CATALOG into 7 broad categories (merging sub-categories).
+
+    Catalog headers like "### Stats Summary" and "### Stats Test" both map to "stats".
+    This gives the router fewer, clearer choices while keeping all handlers accessible.
+    """
+    # Map catalog sub-headers → 7 broad categories
+    header_to_cat = {
+        "Stats Summary": "stats",
+        "Stats Test": "stats",
+        "Clean Values": "clean",
+        "Clean Structure": "clean",
+        "Transform Reshape": "transform",
+        "Transform Encode": "transform",
+        "Viz Basic": "viz",
+        "Viz Advanced": "viz",
+        "Feature Create": "feature",
+        "Feature Select": "feature",
+        "NLP Process": "nlp",
+        "NLP Extract": "nlp",
+        "Analysis Explore": "analysis",
+        "Analysis Model": "analysis",
+    }
+
+    sections: dict[str, list[str]] = {}
     current_key = ""
     current_lines: list[str] = []
-
-    # Map catalog headers to sub-category keys
-    category_map = {
-        "Stats Summary": "stats_summary",
-        "Stats Test": "stats_test",
-        "Clean Values": "clean_values",
-        "Clean Structure": "clean_structure",
-        "Transform Reshape": "transform_reshape",
-        "Transform Encode": "transform_encode",
-        "Viz Basic": "viz_basic",
-        "Viz Advanced": "viz_advanced",
-        "Feature Create": "feature_create",
-        "Feature Select": "feature_select",
-        "NLP Process": "nlp_process",
-        "NLP Extract": "nlp_extract",
-        "Analysis Explore": "analysis_explore",
-        "Analysis Model": "analysis_model",
-    }
 
     for line in HANDLER_CATALOG.split("\n"):
         if line.startswith("### "):
             if current_key and current_lines:
-                sections[current_key] = "\n".join(current_lines)
+                sections.setdefault(current_key, []).extend(current_lines)
             header = line[4:].strip()
             current_key = ""
-            # Match longest prefix first
-            for prefix, key in sorted(category_map.items(), key=lambda x: -len(x[0])):
+            for prefix, key in sorted(header_to_cat.items(), key=lambda x: -len(x[0])):
                 if header.startswith(prefix):
                     current_key = key
                     break
@@ -788,9 +773,9 @@ def _split_catalog_by_category() -> dict[str, str]:
             current_lines.append(line)
 
     if current_key and current_lines:
-        sections[current_key] = "\n".join(current_lines)
+        sections.setdefault(current_key, []).extend(current_lines)
 
-    return sections
+    return {k: "\n".join(v) for k, v in sections.items()}
 
 
 _CATALOG_SECTIONS: dict[str, str] = {}
@@ -866,16 +851,8 @@ def _route_categories(
         categories = result.get("categories", [])
         direct = result.get("direct_answer", False)
 
-        valid_cats = {
-            "stats_summary", "stats_test",
-            "clean_values", "clean_structure",
-            "transform_reshape", "transform_encode",
-            "viz_basic", "viz_advanced",
-            "feature_create", "feature_select",
-            "nlp_process", "nlp_extract",
-            "analysis_explore", "analysis_model",
-        }
-        categories = [c for c in categories if c in valid_cats][:5]
+        valid_cats = {"stats", "clean", "transform", "viz", "feature", "nlp", "analysis"}
+        categories = [c for c in categories if c in valid_cats][:3]
 
         log.info("  router → categories=%s, direct_answer=%s", categories, direct)
         return categories, bool(direct)
@@ -938,7 +915,7 @@ def plan_steps(
         is_about_data = _verify_direct_answer(user_message, columns, model_id)
         if is_about_data:
             log.info("  router said direct_answer but AI verification says it's about data → overriding")
-            categories = ["stats_summary", "analysis_explore"]
+            categories = ["stats", "analysis"]
             is_direct = False
 
     if is_direct:
@@ -953,12 +930,12 @@ def plan_steps(
     # If router returned empty categories (parse failure), use broad fallback
     if not categories:
         log.info("  router returned empty categories → broad fallback")
-        categories = ["stats_summary", "analysis_explore", "viz_basic"]
+        categories = ["stats", "analysis"]
 
     # Stage 2: Build focused catalog and plan
     focused_catalog = _build_focused_catalog(categories)
     handler_count = focused_catalog.count("| ")
-    log.info("  focused catalog: %d sub-categories, ~%d handler rows", len(categories), handler_count // 3)
+    log.info("  focused catalog: %d categories, ~%d handler rows", len(categories), handler_count // 3)
 
     prompt = PLANNER_PROMPT.format(
         user_message=user_message,
