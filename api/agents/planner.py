@@ -539,12 +539,13 @@ Scan the handler table above — if ANY handler matches the user's intent, use i
 
 ### When to use codegen
 Use codegen ONLY when NO handler in the table above can do it:
-  - Binning/cutting with custom labels (pd.cut with formatting)
+  - **Binning/cutting** — "แบ่งเป็น N ระดับ", "split into N levels/bins/ranges" → ALWAYS codegen with pd.cut, never viz.bar_chart
   - Custom calculations (percentages, ratios, derived metrics)
   - Pivot, melt, reshape, merge, join
   - Moving average, rolling window, cumulative operations
   - Complex multi-condition filtering
   - Any custom math/logic not covered by a handler
+IMPORTANT: if user says "แบ่ง/split/divide into N levels/bins" → this is a CODEGEN task (pd.cut), NOT a handler task
 
 ### output_type
   - "query" → stats, viz, questions, any read-only operation
@@ -682,6 +683,9 @@ User: "remove duplicates then fill missing values"
 
 User: "split price into 5 levels and show percentage"
 {{"understanding":"Bin price into 5 ranges with percentages","output_type":"query","steps":[{{"step_num":1,"description":"Bin price into 5 ranges with count and percentage","codegen":{{"task":"Use pd.cut on the price column with bins=5. Count each bin, calculate percentage. Create result DataFrame with Range/Count/Percentage. Format bin labels as human-readable (34K-154K). Create bar chart: fig = px.bar(result, x='Range', y='Count', title='Price Distribution', text='Count')","produces":"dataframe"}}}}]}}
+
+User: "แบ่งราคาบ้านเป็น 6 ระดับและแสดงว่าแต่ละระดับมีจำนวนเท่าไหร่ plot ให้ดูได้ไหม"
+{{"understanding":"Bin price into 6 ranges and plot bar chart","output_type":"query","steps":[{{"step_num":1,"description":"Bin price into 6 ranges and plot","codegen":{{"task":"Use pd.cut(df['price'], bins=6) to create price ranges. Count each range. Create result DataFrame with columns Range and Count. Format range labels as human-readable numbers. Create bar chart: fig = px.bar(result, x='Range', y='Count', title='Price by Range (6 levels)', text='Count', color='Count', color_continuous_scale=['#FFE0CC','#E8500A'])","produces":"dataframe"}}}}]}}
 
 User: "describe the dataset"
 {{"understanding":"Show descriptive statistics","output_type":"query","steps":[{{"step_num":1,"description":"Descriptive statistics","handler":{{"id":"stats.describe","params":{{}}}}}}]}}
