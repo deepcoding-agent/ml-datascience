@@ -642,6 +642,8 @@ When the user asks "how many percent?", "percentage", "proportion", "สัด�
 11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
 12. For multi-step requests ("clean then show chart"), create multiple steps spanning categories.
 13. For "percentage" / "เปอร์เซ็นต์" / "สัดส่วน" of a column → stats.value_counts (already includes percentage)
+14. **NO duplicate chart steps** — if a codegen step already creates a chart (px.bar, px.scatter, go.Figure, px.pie, etc.), do NOT add a separate viz handler step after it. One chart per request is enough.
+15. For binning + plot requests ("แบ่งเป็น N ระดับ แล้ว plot") → use ONE codegen step that does both pd.cut AND creates the chart. Do NOT split into codegen + viz.bar_chart.
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
 
