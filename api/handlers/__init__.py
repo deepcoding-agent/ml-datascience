@@ -67,6 +67,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("stats", "cramers_v"):             stats.handle_cramers_v,
     ("stats", "point_biserial"):        stats.handle_point_biserial,
     ("stats", "levene_test"):           stats.handle_levene_test,
+    ("stats", "class_weight_calc"):      stats.handle_class_weight_calc,
 
     # Clean
     ("clean", "drop_nulls"):        clean.handle_drop_nulls,
@@ -124,6 +125,11 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("clean", "parse_json_column"):     clean.handle_parse_json_column,
     ("clean", "trim_text_length"):      clean.handle_trim_text_length,
     ("clean", "round_to_nearest"):      clean.handle_round_to_nearest,
+    ("clean", "smote_oversample"):      clean.handle_smote_oversample,
+    ("clean", "random_oversample"):     clean.handle_random_oversample,
+    ("clean", "random_undersample"):    clean.handle_random_undersample,
+    ("clean", "adasyn_oversample"):     clean.handle_adasyn_oversample,
+    ("clean", "auto_dtype_infer"):      clean.handle_auto_dtype_infer,
 
     # Transform
     ("transform", "filter"):         transform.handle_filter,
@@ -184,6 +190,12 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("transform", "string_slice"):      transform.handle_string_slice,
     ("transform", "date_diff"):         transform.handle_date_diff,
     ("transform", "row_number"):        transform.handle_row_number,
+    ("transform", "datetime_decompose"): transform.handle_datetime_decompose,
+    ("transform", "target_encode_transform"): transform.handle_target_encode_transform,
+    ("transform", "frequency_encode_transform"): transform.handle_frequency_encode_transform,
+    ("transform", "leave_one_out_encode"): transform.handle_leave_one_out_encode,
+    ("transform", "stratified_sample"):  transform.handle_stratified_sample,
+    ("transform", "systematic_sample"):  transform.handle_systematic_sample,
 
     # Viz
     ("viz", "bar_chart"):          viz.handle_bar_chart,
@@ -299,6 +311,14 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("feature", "string_length_features"): feature.handle_string_length_features,
     ("feature", "cumulative_features"): feature.handle_cumulative_features,
     ("feature", "woe_encode"):          feature.handle_woe_encode,
+    ("feature", "rfe_select"):           feature.handle_rfe_select,
+    ("feature", "mutual_info_select"):   feature.handle_mutual_info_select,
+    ("feature", "variance_threshold"):   feature.handle_variance_threshold,
+    ("feature", "correlation_select"):   feature.handle_correlation_select,
+    ("feature", "boruta_select"):        feature.handle_boruta_select,
+    ("feature", "rolling_window"):       feature.handle_rolling_window,
+    ("feature", "expanding_window"):     feature.handle_expanding_window,
+    ("feature", "seasonal_features"):    feature.handle_seasonal_features,
 
     # NLP / Text preprocessing
     ("nlp", "text_clean"):           nlp.handle_text_clean,
@@ -417,6 +437,10 @@ HANDLER_REGISTRY: dict[tuple[str, str], HandlerFunc] = {
     ("analysis", "dbscan_clustering"):   analysis.handle_dbscan_clustering,
     ("analysis", "hierarchical_clustering"): analysis.handle_hierarchical_clustering,
     ("analysis", "stationarity_test"):   analysis.handle_stationarity_test,
+    ("analysis", "imbalance_report"):    analysis.handle_imbalance_report,
+    ("analysis", "schema_validate"):     analysis.handle_schema_validate,
+    ("analysis", "data_drift_detect"):   analysis.handle_data_drift_detect,
+    ("analysis", "constraint_check"):    analysis.handle_constraint_check,
 }
 
 

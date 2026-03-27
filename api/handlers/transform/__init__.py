@@ -57,6 +57,12 @@ from api.handlers.transform.cast_columns import handle_cast_columns
 from api.handlers.transform.string_slice import handle_string_slice
 from api.handlers.transform.date_diff import handle_date_diff
 from api.handlers.transform.row_number import handle_row_number
+from api.handlers.transform.datetime_decompose import handle_datetime_decompose
+from api.handlers.transform.target_encode import handle_target_encode_transform
+from api.handlers.transform.frequency_encode import handle_frequency_encode_transform
+from api.handlers.transform.leave_one_out_encode import handle_leave_one_out_encode
+from api.handlers.transform.stratified_sample import handle_stratified_sample
+from api.handlers.transform.systematic_sample import handle_systematic_sample
 
 __all__ = [
     "handle_filter",
@@ -117,4 +123,10 @@ __all__ = [
     "handle_string_slice",
     "handle_date_diff",
     "handle_row_number",
+    "handle_datetime_decompose",
+    "handle_target_encode_transform",
+    "handle_frequency_encode_transform",
+    "handle_leave_one_out_encode",
+    "handle_stratified_sample",
+    "handle_systematic_sample",
 ]

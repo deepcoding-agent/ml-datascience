@@ -54,6 +54,7 @@ from api.handlers.stats.confidence_interval import handle_confidence_interval
 from api.handlers.stats.cramers_v import handle_cramers_v
 from api.handlers.stats.point_biserial import handle_point_biserial
 from api.handlers.stats.levene_test import handle_levene_test
+from api.handlers.stats.class_weight_calc import handle_class_weight_calc
 
 __all__ = [
     "handle_describe",
@@ -111,4 +112,5 @@ __all__ = [
     "handle_cramers_v",
     "handle_point_biserial",
     "handle_levene_test",
+    "handle_class_weight_calc",
 ]
