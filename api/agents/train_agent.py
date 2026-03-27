@@ -42,6 +42,15 @@ log = get_logger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# Suppress joblib/loky resource tracker warnings at shutdown
+import os as _os
+_os.environ.setdefault("LOKY_PICKLER", "pickle")
+try:
+    import joblib.externals.loky.backend.resource_tracker as _rt
+    _rt.warnings.filterwarnings("ignore", module="resource_tracker")
+except Exception:
+    pass
+
 
 # ── Step 1: Analyze ──────────────────────────────────────────────────────────
 
