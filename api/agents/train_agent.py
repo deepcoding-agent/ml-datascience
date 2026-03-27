@@ -96,31 +96,50 @@ def _auto_preprocess(
     task_type: str,
     test_size: float = 0.2,
 ) -> dict:
-    """Minimal preprocessing for training: nulls, encoding, scaling, split."""
+    """Smart preprocessing for training — proper encoding for real performance.
+
+    Encoding strategy:
+      - Low cardinality categoricals (< 15 unique): one-hot encoding
+      - High cardinality categoricals (>= 15 unique): ordinal encoding
+      - Numeric string columns: coerce to float
+      - ID-like columns (sequential ints, all unique): drop
+    """
     from sklearn.model_selection import train_test_split
 
     X = df.drop(columns=[target_column], errors="ignore") if target_column else df.copy()
     y = df[target_column].copy() if target_column and target_column in df.columns else None
 
-    # Coerce string-encoded numbers back to numeric (JSON deserialization artifact)
+    # ── Coerce string-encoded numbers (JSON artifact) ──
     if y is not None and y.dtype == "object":
         coerced = pd.to_numeric(y, errors="coerce")
         if coerced.notna().sum() / max(len(y), 1) > 0.8:
             y = coerced
             y = y.fillna(y.median())
 
-    # Coerce string-encoded numeric feature columns
     for col in X.select_dtypes(include="object").columns:
         coerced = pd.to_numeric(X[col], errors="coerce")
         if coerced.notna().sum() / max(len(X), 1) > 0.8:
             X[col] = coerced
 
-    # Drop all-null columns
+    # ── Drop ID-like columns (all unique ints, or named *id) ──
+    drop_ids = []
+    for col in X.columns:
+        if X[col].dtype in ("int64", "float64"):
+            if X[col].nunique() == len(X) and X[col].is_monotonic_increasing:
+                drop_ids.append(col)
+        if col.lower().strip() in ("id", "index", "row_id", "row_number"):
+            drop_ids.append(col)
+    if drop_ids:
+        drop_ids = list(set(drop_ids))
+        log.info("  Dropping ID-like columns: %s", drop_ids)
+        X = X.drop(columns=drop_ids, errors="ignore")
+
+    # ── Drop all-null columns ──
     null_cols = X.columns[X.isnull().all()].tolist()
     if null_cols:
         X = X.drop(columns=null_cols)
 
-    # Fill nulls
+    # ── Fill nulls ──
     for col in X.select_dtypes(include="number").columns:
         if X[col].isnull().any():
             X[col] = X[col].fillna(X[col].median())
@@ -128,15 +147,31 @@ def _auto_preprocess(
         if X[col].isnull().any():
             X[col] = X[col].fillna(X[col].mode().iloc[0] if not X[col].mode().empty else "missing")
 
-    # Encode categoricals
+    # ── Encode categoricals ──
     cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-    encoders: dict[str, OrdinalEncoder] = {}
+    encoders: dict = {}
+    onehot_cols: list[str] = []
+    ordinal_cols: list[str] = []
+
     for col in cat_cols:
+        n_unique = X[col].nunique()
+        if n_unique < 15:
+            onehot_cols.append(col)
+        else:
+            ordinal_cols.append(col)
+
+    # One-hot encode low-cardinality categoricals (proper ML encoding)
+    if onehot_cols:
+        X = pd.get_dummies(X, columns=onehot_cols, drop_first=True, dtype=float)
+        encoders["__onehot__"] = onehot_cols
+
+    # Ordinal encode high-cardinality categoricals (fallback)
+    for col in ordinal_cols:
         enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
         X[col] = enc.fit_transform(X[[col]])
         encoders[col] = enc
 
-    # Encode target for classification
+    # ── Encode target for classification ──
     label_encoder = None
     class_names: list[str] = []
     if y is not None and task_type == "classification":
@@ -148,11 +183,11 @@ def _auto_preprocess(
 
     feature_names = X.columns.tolist()
 
-    # Scale
+    # ── Scale numeric features ──
     scaler = StandardScaler()
     X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=feature_names, index=X.index)
 
-    # Train/test split (fall back to non-stratified if classes have < 2 members)
+    # ── Train/test split ──
     if y is not None:
         stratify = y if task_type == "classification" else None
         try:
@@ -160,13 +195,16 @@ def _auto_preprocess(
                 X_scaled, y, test_size=test_size, random_state=42, stratify=stratify,
             )
         except ValueError:
-            log.warning("Stratified split failed (singleton classes) — falling back to random split")
+            log.warning("Stratified split failed — falling back to random split")
             X_train, X_test, y_train, y_test = train_test_split(
                 X_scaled, y, test_size=test_size, random_state=42,
             )
     else:
         X_train, X_test = X_scaled, X_scaled
         y_train, y_test = None, None
+
+    log.info("  Encoding: one-hot=%s  ordinal=%s  features=%d",
+             onehot_cols, ordinal_cols, len(feature_names))
 
     return {
         "X_train": X_train, "X_test": X_test,

@@ -336,19 +336,19 @@ def select_algorithms(
             selected.append("adaboost_clf")
 
     elif task_type == "regression":
-        selected.append("linear_regression")
+        # Always include strong baselines + boosting
         selected.append("random_forest_reg")
         selected.append("xgboost_reg")
-
-        if n_rows > 5000:
-            selected.append("lightgbm_reg")
+        selected.append("lightgbm_reg")
         selected.append("gradient_boosting_reg")
+        selected.append("ridge")
+        selected.append("linear_regression")
         if n_rows < 5000:
             selected.append("svr_reg")
             selected.append("knn_reg")
-        selected.append("ridge")
         if n_features > 20:
             selected.append("lasso")
+            selected.append("elastic_net")
 
     # Deduplicate while preserving order, cap at 8
     seen: set[str] = set()
