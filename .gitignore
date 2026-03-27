@@ -185,3 +185,4 @@ environment_ds4b_301p_dev.yml
 # Dynamic generated handlers
 api/handlers/generated/*.py
 !api/handlers/generated/__init__.py
+package-lock.json
