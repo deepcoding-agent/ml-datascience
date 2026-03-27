@@ -181,6 +181,18 @@ def _auto_preprocess(
 
 # ── Step 4: Cross-validate ───────────────────────────────────────────────────
 
+def _safe_cv_folds(y_train: np.ndarray | None, requested_folds: int, task_type: str) -> int:
+    """Reduce CV folds so every class has >= n_splits members."""
+    if task_type != "classification" or y_train is None:
+        return min(requested_folds, max(2, len(y_train) if y_train is not None else 2))
+    _, counts = np.unique(y_train, return_counts=True)
+    min_class = int(counts.min())
+    safe = max(2, min(requested_folds, min_class))
+    if safe < requested_folds:
+        log.info("  Reduced CV folds %d→%d (smallest class has %d members)", requested_folds, safe, min_class)
+    return safe
+
+
 def _cross_validate_all(
     algo_keys: list[str],
     task_type: str,
@@ -188,9 +200,14 @@ def _cross_validate_all(
     y_train: np.ndarray,
     cv_folds: int = 5,
 ) -> list[dict]:
-    """Run cross-validation for all selected algorithms."""
+    """Run cross-validation for all selected algorithms.
+
+    Auto-reduces folds for small datasets and falls back from
+    StratifiedKFold → KFold → simple fit if CV is impossible.
+    """
     results: list[dict] = []
     registry = get_algorithms_for_task(task_type)
+    actual_folds = _safe_cv_folds(y_train, cv_folds, task_type)
 
     for algo_key in algo_keys:
         entry = registry[algo_key]
@@ -198,14 +215,7 @@ def _cross_validate_all(
         t0 = time.time()
 
         try:
-            if task_type == "classification":
-                cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-                scoring = {"accuracy": "accuracy", "f1": "f1_weighted", "precision": "precision_weighted", "recall": "recall_weighted"}
-            elif task_type == "regression":
-                cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-                scoring = {"rmse": "neg_root_mean_squared_error", "mae": "neg_mean_absolute_error", "r2": "r2"}
-            else:
-                # Clustering: no CV, just fit + score
+            if task_type == "clustering":
                 model.fit(X_train)
                 labels = model.labels_ if hasattr(model, "labels_") else model.predict(X_train)
                 metrics = compute_clustering_metrics(np.array(X_train), np.array(labels))
@@ -219,14 +229,73 @@ def _cross_validate_all(
                 })
                 continue
 
-            cv_results = cross_validate(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1, return_train_score=False)
-            duration = time.time() - t0
+            if task_type == "classification":
+                scoring = {"accuracy": "accuracy", "f1": "f1_weighted", "precision": "precision_weighted", "recall": "recall_weighted"}
+            else:
+                scoring = {"rmse": "neg_root_mean_squared_error", "mae": "neg_mean_absolute_error", "r2": "r2"}
 
+            # Try StratifiedKFold → KFold → simple fit
+            cv_results = None
+            for cv_strategy in ("stratified", "kfold", "none"):
+                try:
+                    if cv_strategy == "stratified" and task_type == "classification":
+                        cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=42)
+                    elif cv_strategy == "kfold":
+                        folds = min(actual_folds, len(X_train))
+                        if folds < 2:
+                            continue
+                        cv = KFold(n_splits=folds, shuffle=True, random_state=42)
+                    elif cv_strategy == "none":
+                        # Last resort: simple fit, evaluate on train set
+                        model.fit(X_train, y_train)
+                        y_pred = model.predict(X_train)
+                        if task_type == "classification":
+                            from sklearn.metrics import accuracy_score, f1_score
+                            cv_metrics_dict = {
+                                "accuracy_mean": float(accuracy_score(y_train, y_pred)),
+                                "accuracy_std": 0.0,
+                                "f1_mean": float(f1_score(y_train, y_pred, average="weighted", zero_division=0)),
+                                "f1_std": 0.0,
+                            }
+                        else:
+                            from sklearn.metrics import mean_squared_error, r2_score
+                            cv_metrics_dict = {
+                                "rmse_mean": float(np.sqrt(mean_squared_error(y_train, y_pred))),
+                                "rmse_std": 0.0,
+                                "r2_mean": float(r2_score(y_train, y_pred)),
+                                "r2_std": 0.0,
+                            }
+                        duration = time.time() - t0
+                        results.append({
+                            "algo_key": algo_key,
+                            "display_name": entry["display_name"],
+                            "cv_metrics": cv_metrics_dict,
+                            "train_time": duration,
+                            "model": model,
+                        })
+                        log.info("  Fit done (no CV): %s  (%.1fs)", entry["display_name"], duration)
+                        cv_results = True  # sentinel — already appended
+                        break
+                    else:
+                        continue
+
+                    cv_results = cross_validate(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1, return_train_score=False)
+                    break  # success
+                except ValueError:
+                    continue
+
+            if cv_results is None:
+                log.warning("  All CV strategies failed for %s", entry["display_name"])
+                continue
+            if cv_results is True:
+                continue  # already appended in "none" branch
+
+            duration = time.time() - t0
             cv_metrics: dict[str, float] = {}
-            for metric_name, scorer_name in scoring.items():
+            for metric_name in scoring:
                 vals = cv_results[f"test_{metric_name}"]
                 if metric_name in ("rmse", "mae"):
-                    vals = -vals  # neg_ scorers
+                    vals = -vals
                 cv_metrics[f"{metric_name}_mean"] = float(np.mean(vals))
                 cv_metrics[f"{metric_name}_std"] = float(np.std(vals))
 
@@ -287,13 +356,7 @@ def _tune_model(
 
         model = instantiate_model(task_type, algo_key, params)
 
-        if task_type == "classification":
-            cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-            scoring = "f1_weighted"
-        elif task_type == "regression":
-            cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-            scoring = "neg_root_mean_squared_error"
-        else:
+        if task_type == "clustering":
             model.fit(X_train)
             labels = model.labels_ if hasattr(model, "labels_") else model.predict(X_train)
             n_labels = len(set(labels)) - (1 if -1 in labels else 0)
@@ -302,9 +365,33 @@ def _tune_model(
             from sklearn.metrics import silhouette_score
             return float(silhouette_score(X_train, labels))
 
+        safe_folds = _safe_cv_folds(y_train, cv_folds, task_type)
+        if task_type == "classification":
+            scoring = "f1_weighted"
+        else:
+            scoring = "neg_root_mean_squared_error"
+
         from sklearn.model_selection import cross_val_score
-        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
-        return float(np.mean(scores))
+        # Try stratified → kfold → simple fit
+        for cv_strat in ("stratified", "kfold", "fit"):
+            try:
+                if cv_strat == "stratified" and task_type == "classification":
+                    cv = StratifiedKFold(n_splits=safe_folds, shuffle=True, random_state=42)
+                elif cv_strat == "kfold":
+                    cv = KFold(n_splits=max(2, min(safe_folds, len(X_train))), shuffle=True, random_state=42)
+                else:
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_train)
+                    if task_type == "classification":
+                        from sklearn.metrics import f1_score
+                        return float(f1_score(y_train, y_pred, average="weighted", zero_division=0))
+                    else:
+                        return float(-np.sqrt(np.mean((y_train - y_pred) ** 2)))
+                scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
+                return float(np.mean(scores))
+            except ValueError:
+                continue
+        return -1.0
 
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
@@ -496,7 +583,15 @@ def run_training(
     # Classification report text
     clf_report = ""
     if detected_task == "classification" and class_names:
-        clf_report = get_classification_report_text(y_test, y_pred, class_names)
+        try:
+            clf_report = get_classification_report_text(y_test, y_pred, class_names)
+        except ValueError:
+            # Test set may have fewer classes than full set — use labels present in test
+            test_classes = [class_names[i] for i in sorted(set(y_test.astype(int)))] if len(class_names) > 0 else None
+            try:
+                clf_report = get_classification_report_text(y_test, y_pred, test_classes or class_names)
+            except Exception:
+                clf_report = ""
 
     # Step 7: Save model
     pipeline_bundle = {
