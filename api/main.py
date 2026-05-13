@@ -27,6 +27,7 @@ from api.routes.insights import router as insights_router
 from api.routes.models import router as models_router
 from api.routes.prepare import router as prepare_router
 from api.routes.documents import router as documents_router
+from api.routes.predict import router as predict_router
 from api.routes.suggest_target import router as suggest_router
 from api.routes.train import router as train_router
 
@@ -46,6 +47,7 @@ app.include_router(documents_router)
 app.include_router(eda_router)
 app.include_router(insights_router)
 app.include_router(models_router)
+app.include_router(predict_router)
 app.include_router(prepare_router)
 app.include_router(suggest_router)
 app.include_router(train_router)

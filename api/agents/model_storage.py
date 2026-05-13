@@ -117,3 +117,55 @@ def get_model_path(model_id: str) -> Path | None:
     """Return the .joblib file path if it exists."""
     p = MODELS_DIR / f"{model_id}.joblib"
     return p if p.exists() else None
+
+
+def rename_model(model_id: str, display_name: str) -> dict:
+    """Set a friendly display name on a saved model's metadata."""
+    meta_path = MODELS_DIR / f"{model_id}.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Model metadata not found: {model_id}")
+    meta = json.loads(meta_path.read_text())
+    meta["display_name"] = display_name
+    meta_path.write_text(json.dumps(meta, indent=2, default=str))
+    log.info("Renamed model %s -> %s", model_id, display_name)
+    return meta
+
+
+def set_library_flag(model_id: str, saved: bool) -> dict:
+    """Toggle the saved_to_library flag on a model's metadata."""
+    meta_path = MODELS_DIR / f"{model_id}.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Model metadata not found: {model_id}")
+    meta = json.loads(meta_path.read_text())
+    meta["saved_to_library"] = bool(saved)
+    meta_path.write_text(json.dumps(meta, indent=2, default=str))
+    log.info("Library flag for %s -> %s", model_id, saved)
+    return meta
+
+
+def delete_model(model_id: str) -> bool:
+    """Remove both the .joblib bundle and .json metadata for a model."""
+    model_path = MODELS_DIR / f"{model_id}.joblib"
+    meta_path = MODELS_DIR / f"{model_id}.json"
+    deleted = False
+    for p in (model_path, meta_path):
+        if p.exists():
+            p.unlink()
+            deleted = True
+    if deleted:
+        log.info("Deleted model %s", model_id)
+    return deleted
+
+
+def list_library_models() -> list[dict]:
+    """List models the user explicitly saved to the cross-conversation library."""
+    results: list[dict] = []
+    for meta_path in MODELS_DIR.glob("*.json"):
+        try:
+            meta = json.loads(meta_path.read_text())
+            if meta.get("saved_to_library"):
+                results.append(meta)
+        except (json.JSONDecodeError, KeyError):
+            continue
+    results.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+    return results
