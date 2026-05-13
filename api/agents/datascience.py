@@ -105,8 +105,16 @@ def run_datascience_agent(
     log.info("━━ DS-Agent start ━━  datasets=%s", [d.name for d in datasets])
     df = pd.DataFrame(primary.data)
     extra_dfs: dict[str, pd.DataFrame] = {}
+    # Also expose the primary by its sanitized variable name so codegen can
+    # reference the ORIGINAL primary df (not the pipelined `df` that may have
+    # been mutated by earlier steps). `df` itself remains the chained current df.
+    primary_var = sanitize_var_name(primary.name)
+    if primary_var and primary_var != "df":
+        extra_dfs[primary_var] = df.copy()
     for ds in datasets[1:]:
-        extra_dfs[sanitize_var_name(ds.name)] = pd.DataFrame(ds.data)
+        var_name = sanitize_var_name(ds.name)
+        if var_name and var_name != "df":
+            extra_dfs[var_name] = pd.DataFrame(ds.data)
 
     # Step 2: Analyze context
     ctx = analyze_context(df)
@@ -120,6 +128,20 @@ def run_datascience_agent(
 
     # Step 4: AI planner — the sole decision-maker
     df_ctx = data_context(df, primary.name)
+    if extra_dfs:
+        lines = ["", "## All loaded datasets (available as Python variables)"]
+        for var_name, edf in extra_dfs.items():
+            tag = " (primary; same as `df`)" if var_name == primary_var else ""
+            lines.append(
+                f"- `{var_name}`{tag}: shape={edf.shape}, columns={list(edf.columns)[:20]}"
+            )
+        lines.append(
+            "These variables always point to the ORIGINAL dataframes, never "
+            "to intermediate pipeline output. Prefer referencing them by name "
+            "in codegen for cross-dataset operations so results don't depend "
+            "on the order of earlier steps."
+        )
+        df_ctx = df_ctx + "\n" + "\n".join(lines)
     planner_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
     plan = plan_steps(
         user_message=message,
@@ -155,6 +177,7 @@ def run_datascience_agent(
         df=df,
         df_context=df_ctx,
         llm=executor_llm,
+        extra_dfs=extra_dfs or None,
     )
 
     # Step 7: Build response text

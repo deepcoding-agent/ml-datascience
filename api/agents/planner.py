@@ -547,6 +547,37 @@ Use codegen ONLY when NO handler in the table above can do it:
   - Any custom math/logic not covered by a handler
 IMPORTANT: if user says "แบ่ง/split/divide into N levels/bins" → this is a CODEGEN task (pd.cut), NOT a handler task
 
+### Multi-dataset: which dataframe does each step run on?
+The primary dataframe is `df`. Any "Additional datasets available as variables" listed
+above are also loaded and available by their variable name.
+
+For EACH step you emit, you MAY add an optional field `"dataset": "<variable_name>"`
+to tell the executor which dataframe that step targets.
+  - Omitted or `"df"` → run on the primary dataframe (default).
+  - Equal to one of the extra variable names → run on that extra dataframe instead.
+
+NEVER emit two handler steps without `dataset` set when the user mentioned a non-primary
+dataset — step 2 would otherwise just run on step 1's output instead of the intended df.
+
+### CRITICAL CONTRACT: only ONE result table is shown to the user
+The chat surfaces ONE table per response — the result of the LAST step that produces a
+DataFrame. So plan accordingly:
+
+- For ANY comparison / diff / merge / contrast question across datasets (words like
+  "compare", "vs", "difference", "ต่างกัน", "เทียบ", "ระหว่าง"), emit exactly ONE codegen
+  step that builds a single combined DataFrame containing rows/columns from each dataset
+  side by side. Do NOT split into per-dataset handler steps — the user will only see the
+  last one and miss the comparison.
+
+- For "show X for each of A and B" questions, you may still use per-dataset handler
+  steps, but then add ONE final codegen step whose result_df concatenates the per-step
+  outputs into a single labeled table. Otherwise the user only sees the last dataset.
+
+- A codegen step that only prints scalars (e.g. "the difference is 1053") with no
+  result_df leaves the last handler's table as the user-facing artifact — that table
+  almost certainly belongs to a different dataset than what the user is asking about,
+  which is confusing. Always have the final step produce result_df.
+
 ### output_type
   - "query" → stats, viz, questions, any read-only operation
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
