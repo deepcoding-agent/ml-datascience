@@ -5,6 +5,7 @@ Only called for codegen results — handler-only results use their summaries dir
 """
 from __future__ import annotations
 
+from api.llm import format_history_for_prompt
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -13,6 +14,15 @@ INTERPRETER_PROMPT = """\
 The user asked: "{user_message}"
 
 Steps executed: {steps_summary}
+
+## CONVERSATION HISTORY (recent turns)
+{conversation_history}
+
+> History rule: use the history only when the user's current message clearly
+> refers to it (follow-ups like "do the same for X", "show me more",
+> "compare with the previous one"). If the question is self-contained, write
+> your answer without alluding to past turns — do not mention "as before",
+> "as we discussed", or summarise previous outputs unprompted.
 
 ## ACTUAL RESULTS
 {actual_data}
@@ -44,6 +54,7 @@ def interpret_final_result(
     plan: dict,
     exec_result: dict,
     llm,
+    history: list | None = None,
 ) -> str:
     """Generate human-readable interpretation of execution results."""
     actual_data_parts: list[str] = []
@@ -71,6 +82,7 @@ def interpret_final_result(
         user_message=user_message,
         steps_summary=steps_summary,
         actual_data="\n\n".join(actual_data_parts),
+        conversation_history=format_history_for_prompt(history),
     )
 
     try:

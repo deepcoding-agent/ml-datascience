@@ -74,6 +74,7 @@ def execute_plan(
     df_context: str,
     llm,
     extra_dfs: dict[str, pd.DataFrame] | None = None,
+    history: list | None = None,
 ) -> dict:
     """Execute each step. Follows planner's routing — handler or codegen."""
     current_df = df.copy() if df is not None else None
@@ -158,6 +159,7 @@ def execute_plan(
                 current_df=step_df,
                 produces=produces,
                 llm=llm,
+                history=history,
             )
             all_code.append(code)
 
@@ -165,9 +167,9 @@ def execute_plan(
                 code, step_df, extra_dfs=extra_dfs,
             )
 
-            # Auto-retry on error
+            # Auto-retry on Python exception
             if stdout.startswith("Code execution error"):
-                log.info("    codegen retry: %s", stdout[:100])
+                log.info("    codegen retry (exception): %s", stdout[:100])
                 retry_code = generate_step_code(
                     step_description=task,
                     df_context=df_context,
@@ -175,6 +177,34 @@ def execute_plan(
                     produces=produces,
                     llm=llm,
                     previous_error=stdout,
+                    history=history,
+                )
+                all_code.append(retry_code)
+                stdout, sandbox_result_df, chart_b64, sandbox_df, chart_json = run_code(
+                    retry_code, step_df, extra_dfs=extra_dfs,
+                )
+
+            # Validate logical output — empty df, missing table when promised, etc.
+            # These don't raise Python exceptions but still make the answer wrong.
+            validation_issue = _validate_codegen_output(
+                sandbox_result_df, stdout, chart_json, produces,
+            )
+            if validation_issue and not stdout.startswith("Code execution error"):
+                log.info("    codegen retry (logic): %s", validation_issue)
+                retry_code = generate_step_code(
+                    step_description=task,
+                    df_context=df_context,
+                    current_df=step_df,
+                    produces=produces,
+                    llm=llm,
+                    previous_error=(
+                        f"Output validation failed: {validation_issue}. "
+                        "Make sure your code sets `result` as a non-empty pandas "
+                        "DataFrame when the task produces a table, and `fig` when "
+                        "it produces a chart. Verify each column you reference "
+                        "exists in the dtypes list."
+                    ),
+                    history=history,
                 )
                 all_code.append(retry_code)
                 stdout, sandbox_result_df, chart_b64, sandbox_df, chart_json = run_code(
@@ -239,6 +269,39 @@ def execute_plan(
         "code": "\n\n".join(all_code) if all_code else "",
         "success": all(s["success"] for s in step_results) if step_results else True,
     }
+
+
+def _validate_codegen_output(
+    result_df: pd.DataFrame | None,
+    stdout: str,
+    chart_json: str | None,
+    produces: str,
+) -> str | None:
+    """Return a short description of the problem, or None if the output is fine.
+
+    Checks for common "logic" failures that don't raise Python exceptions but
+    still leave the user without an answer (empty result_df, missing chart,
+    silent no-op). Cheap and synchronous — runs before the LLM critique pass.
+    """
+    p = (produces or "").lower()
+    stdout_clean = (stdout or "").strip()
+    has_table = result_df is not None and not result_df.empty
+    has_chart = bool(chart_json)
+    has_text = bool(stdout_clean) and not stdout_clean.startswith("Code execution error")
+
+    if p in ("table", "dataframe"):
+        if result_df is None:
+            return "no `result` DataFrame was created"
+        if result_df.empty:
+            return "`result` DataFrame is empty"
+    if p in ("chart", "plot", "figure"):
+        if not has_chart:
+            return "no Plotly `fig` was assigned"
+
+    # Catch-all: produced literally nothing despite running without error.
+    if not has_table and not has_chart and not has_text:
+        return "code ran but produced no result, chart, or printed output"
+    return None
 
 
 def _maybe_combine_per_dataset(

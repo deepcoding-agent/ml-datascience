@@ -1,9 +1,11 @@
 """Training routes — POST /train, GET /train/models, GET /train/models/{id}/download."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from api.agents.model_storage import (
     delete_model,
@@ -18,6 +20,9 @@ from api.logger import get_logger
 
 router = APIRouter()
 log = get_logger(__name__)
+
+# Tight limit on /train — Optuna tuning is expensive (CPU + LLM narrative).
+limiter = Limiter(key_func=get_remote_address)
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -58,7 +63,8 @@ class TrainResponse(BaseModel):
 # ── POST /train ──────────────────────────────────────────────────────────────
 
 @router.post("/train", response_model=TrainResponse)
-async def train(req: TrainRequest) -> TrainResponse:
+@limiter.limit("6/minute")
+async def train(request: Request, req: TrainRequest) -> TrainResponse:
     log.info(">>> /train  rows=%d  cols=%d  target=%s  task=%s",
              len(req.rows), len(req.columns), req.target_column, req.task_type)
     try:

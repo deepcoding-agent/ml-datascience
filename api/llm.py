@@ -89,3 +89,33 @@ def build_lc_history(
             content = content[:max_chars_per_msg] + "\n... (truncated)"
         result.append(mapping[m.role](content=content))
     return result
+
+
+def format_history_for_prompt(
+    history: list[ChatMessage] | None,
+    max_messages: int = 6,
+    max_chars_per_msg: int = 500,
+) -> str:
+    """Format recent conversation history as a compact text block for prompts.
+
+    Returns a plain-text block like:
+        user: ...
+        assistant: ...
+
+    Always returns a non-empty string. When *history* is empty, returns a
+    sentinel "(no previous conversation)" so downstream prompts can include
+    a single uniform "CONVERSATION HISTORY" section unconditionally.
+    """
+    if not history:
+        return "(no previous conversation)"
+    recent = history[-max_messages:]
+    lines: list[str] = []
+    for m in recent:
+        role = (m.role or "").strip() or "user"
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        if len(content) > max_chars_per_msg:
+            content = content[:max_chars_per_msg] + "…"
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines) if lines else "(no previous conversation)"

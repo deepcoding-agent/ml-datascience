@@ -1,11 +1,13 @@
 """Model Storage — save and load trained models as .joblib files.
 
-Models are stored in ml-datascience/models/ with metadata JSON sidecars.
-Sprint 8 will migrate this to S3/GCS.
+Models are stored in ``$MODELS_DIR`` (default ``ml-datascience/models``)
+with metadata JSON sidecars. In production on Fly.io this points at a
+persistent volume mounted at ``/app/models`` (see ``fly.toml``).
 """
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +19,12 @@ from api.logger import get_logger
 
 log = get_logger(__name__)
 
-MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
-MODELS_DIR.mkdir(exist_ok=True)
+# Production: Fly volume at /app/models (set via Dockerfile ENV)
+# Dev: repo-relative fallback so local pytest + dev server keep working
+_DEFAULT_MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
+MODELS_DIR = Path(os.environ.get("MODELS_DIR") or _DEFAULT_MODELS_DIR)
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+log.info("Model storage dir: %s", MODELS_DIR)
 
 
 def save_model(

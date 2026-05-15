@@ -21,7 +21,10 @@ import pandas as pd
 from langchain_core.messages import HumanMessage
 
 from api.agents.context_analyzer import analyze_context
+from api.agents.critique import critique_result
+from api.agents.insights import surface_insights
 from api.agents.planner import plan_steps
+from api.agents.replanner import propose_followup_steps
 from api.agents.result_interpreter import interpret_final_result
 from api.agents.step_executor import execute_plan
 from api.context import data_context, sanitize_var_name
@@ -66,24 +69,32 @@ def _build_response_text(
     plan: dict,
     message: str,
     model_id: str | None,
+    history: list[ChatMessage] | None = None,
 ) -> str:
     """Build response text.
 
     - Handler-only results → use handler summaries directly (no extra LLM call)
     - Codegen or mixed results → LLM interpreter for richer explanation
+    - Non-Latin user messages → route through interpreter for language matching
+      (handlers always emit English; the interpreter respects the user's locale)
     """
     stdout = exec_result.get("stdout", "")
     step_results = exec_result.get("step_results", [])
 
-    # If all steps used handlers and there's stdout, use it directly
+    # If all steps used handlers and the user wrote in plain ASCII (English),
+    # we can return raw handler stdout for speed. Otherwise we MUST go through
+    # the interpreter so the response matches the user's language.
     all_handler = step_results and all(s.get("used_handler") for s in step_results)
-    if all_handler and stdout:
+    user_is_ascii = all(ord(c) < 128 for c in message)
+    if all_handler and stdout and user_is_ascii:
         return stdout
 
     # For codegen or mixed results, use LLM interpreter
     try:
         interp_llm = get_llm(temperature=0.0, max_tokens=4096, model_id=model_id)
-        return interpret_final_result(message, plan, exec_result, interp_llm)
+        return interpret_final_result(
+            message, plan, exec_result, interp_llm, history=history,
+        )
     except Exception as e:
         log.error("Interpretation failed: %s", e)
         return stdout or "Operation completed."
@@ -178,10 +189,140 @@ def run_datascience_agent(
         df_context=df_ctx,
         llm=executor_llm,
         extra_dfs=extra_dfs or None,
+        history=history,
     )
 
+    # Step 6b: Critique pass — does the produced result actually answer the
+    # question? If not, run ONE codegen step to fix it before responding.
+    critique_llm = get_llm(temperature=0.0, max_tokens=400, model_id=model_id)
+    critique = critique_result(
+        user_message=message,
+        plan=plan,
+        exec_result=exec_result,
+        df_context=df_ctx,
+        llm=critique_llm,
+        history=history,
+    )
+    log.info("  critique: verdict=%s reason=%s",
+             critique.get("verdict"), (critique.get("reason") or "")[:80])
+
+    if critique.get("verdict") == "fix_needed" and critique.get("fix_task"):
+        log.info("  critique → running fix codegen step")
+        fix_plan = {
+            "output_type": exec_result.get("output_type", "query"),
+            "steps": [{
+                "step_num": "fix",
+                "description": "Critique-driven fix",
+                "codegen": {"task": critique["fix_task"], "produces": "table"},
+            }],
+        }
+        fix_result = execute_plan(
+            plan=fix_plan,
+            df=df,
+            df_context=df_ctx,
+            llm=executor_llm,
+            extra_dfs=extra_dfs or None,
+            history=history,
+        )
+        # Only adopt the fix if it actually produced something — otherwise keep
+        # the original (a failed critique fix should not erase a working result).
+        fix_final_df = fix_result.get("final_df")
+        fix_charts = fix_result.get("charts_plotly") or []
+        fix_stdout = (fix_result.get("stdout") or "").strip()
+        if fix_final_df is not None or fix_stdout or fix_charts:
+            # The critique deemed the original output wrong, so the fix REPLACES
+            # the user-facing artifacts. Only keep the original's table/chart
+            # when the fix itself produced none — that way a fix that only
+            # added clarifying text doesn't accidentally wipe the answer.
+            new_final_df = (
+                fix_final_df if fix_final_df is not None
+                else exec_result.get("final_df")
+            )
+            new_charts = fix_charts if fix_charts else exec_result.get("charts_plotly", [])
+            exec_result = {
+                **exec_result,
+                "final_df": new_final_df,
+                "stdout": (
+                    (exec_result.get("stdout") or "")
+                    + "\n"
+                    + fix_stdout
+                ).strip(),
+                "code": (
+                    (exec_result.get("code") or "")
+                    + "\n\n# Critique fix\n"
+                    + (fix_result.get("code") or "")
+                ).strip(),
+                "charts_plotly": new_charts,
+            }
+
+    # Step 6c: Adaptive replanning — the planner gets to see the actual output
+    # and propose follow-up steps if the answer is objectively incomplete.
+    # This is the "think for yourself" pass — it can add, augment, or refine
+    # but is biased toward leaving good answers alone.
+    replanner_llm = get_llm(temperature=0.0, max_tokens=600, model_id=model_id)
+    followup_steps = propose_followup_steps(
+        user_message=message,
+        plan=plan,
+        exec_result=exec_result,
+        df_context=df_ctx,
+        llm=replanner_llm,
+        history=history,
+    )
+    if followup_steps:
+        # Run follow-ups against the CURRENT result so they refine instead of
+        # restarting. The original primary and extras are still reachable by
+        # variable name (we injected them into extra_dfs earlier).
+        followup_df = exec_result.get("final_df")
+        if followup_df is None:
+            followup_df = df  # fall back to the original primary
+        followup_result = execute_plan(
+            plan={
+                "output_type": exec_result.get("output_type", "query"),
+                "steps": followup_steps,
+            },
+            df=followup_df,
+            df_context=df_ctx,
+            llm=executor_llm,
+            extra_dfs=extra_dfs or None,
+            history=history,
+        )
+        fu_final_df = followup_result.get("final_df")
+        fu_charts = followup_result.get("charts_plotly") or []
+        fu_stdout = (followup_result.get("stdout") or "").strip()
+        if fu_final_df is not None or fu_stdout or fu_charts:
+            exec_result = {
+                **exec_result,
+                "final_df": fu_final_df if fu_final_df is not None else exec_result.get("final_df"),
+                "charts_plotly": fu_charts if fu_charts else exec_result.get("charts_plotly", []),
+                "stdout": (
+                    (exec_result.get("stdout") or "")
+                    + "\n"
+                    + fu_stdout
+                ).strip(),
+                "code": (
+                    (exec_result.get("code") or "")
+                    + "\n\n# Adaptive follow-up\n"
+                    + (followup_result.get("code") or "")
+                ).strip(),
+            }
+
     # Step 7: Build response text
-    final_text = _build_response_text(exec_result, plan, message, model_id)
+    final_text = _build_response_text(
+        exec_result, plan, message, model_id, history=history,
+    )
+
+    # Step 7b: Proactive insights — append a short "💡 Notes" section when a
+    # senior data scientist would naturally point out something useful.
+    insights_llm = get_llm(temperature=0.3, max_tokens=350, model_id=model_id)
+    insight_block = surface_insights(
+        user_message=message,
+        exec_result=exec_result,
+        df_context=df_ctx,
+        final_text=final_text,
+        llm=insights_llm,
+    )
+    if insight_block:
+        final_text = final_text + insight_block
 
     # Step 8: Build artifacts
     output_type = exec_result.get("output_type", "query")
