@@ -191,6 +191,20 @@ def _auto_preprocess(
     elif y is not None:
         y = y.astype(float)
 
+    # ── Log-transform skewed regression targets ──
+    # Right-skewed targets (housing prices, salaries, counts) hurt RMSE because
+    # outliers dominate. log1p compresses the tail; expm1 reverses for metrics.
+    log_target = False
+    if y is not None and task_type == "regression":
+        try:
+            target_skew = float(y.skew())
+            if abs(target_skew) > 1.0 and bool((y > -1.0).all()):
+                y = pd.Series(np.log1p(y.values), name=y.name)
+                log_target = True
+                log.info("  Log-transformed target (skew=%.2f)", target_skew)
+        except Exception as exc:
+            log.warning("  Skew check failed for target: %s", exc)
+
     feature_names = X.columns.tolist()
 
     # ── Scale numeric features ──
@@ -224,6 +238,7 @@ def _auto_preprocess(
         "label_encoder": label_encoder,
         "scaler": scaler,
         "encoders": encoders,
+        "log_target": log_target,
     }
 
 
@@ -365,6 +380,50 @@ def _cross_validate_all(
 
 # ── Step 5: Hyperparameter tuning ────────────────────────────────────────────
 
+def _baseline_cv_score(
+    model: Any,
+    task_type: str,
+    X_train: np.ndarray,
+    y_train: np.ndarray | None,
+    cv_folds: int,
+) -> float:
+    """CV score on the same metric Optuna would optimize — used when an algorithm
+    has no tunable params so it can compete fairly with tuned models."""
+    if task_type == "clustering":
+        try:
+            model.fit(X_train)
+            labels = model.labels_ if hasattr(model, "labels_") else model.predict(X_train)
+            n_labels = len(set(labels)) - (1 if -1 in labels else 0)
+            if n_labels < 2:
+                return -1.0
+            from sklearn.metrics import silhouette_score
+            return float(silhouette_score(X_train, labels))
+        except Exception:
+            return -1.0
+
+    scoring = "f1_weighted" if task_type == "classification" else "neg_root_mean_squared_error"
+    safe_folds = _safe_cv_folds(y_train, cv_folds, task_type)
+    from sklearn.model_selection import cross_val_score
+    for cv_strat in ("stratified", "kfold", "fit"):
+        try:
+            if cv_strat == "stratified" and task_type == "classification":
+                cv = StratifiedKFold(n_splits=safe_folds, shuffle=True, random_state=42)
+            elif cv_strat == "kfold":
+                cv = KFold(n_splits=max(2, min(safe_folds, len(X_train))), shuffle=True, random_state=42)
+            else:
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_train)
+                if task_type == "classification":
+                    from sklearn.metrics import f1_score
+                    return float(f1_score(y_train, y_pred, average="weighted", zero_division=0))
+                return float(-np.sqrt(np.mean((y_train - y_pred) ** 2)))
+            scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=2)
+            return float(np.mean(scores))
+        except ValueError:
+            continue
+    return float("-inf")
+
+
 def _tune_model(
     algo_key: str,
     task_type: str,
@@ -382,12 +441,16 @@ def _tune_model(
     tunable = entry.get("tunable_params", {})
 
     if not tunable:
+        # No hyperparameters to search — still need a real CV score on the
+        # same metric scale as tuned algos so model selection compares fairly.
+        # (Was returning 0.0, which beat any negative neg_RMSE for regression.)
         model = instantiate_model(task_type, algo_key)
+        baseline_score = _baseline_cv_score(model, task_type, X_train, y_train, cv_folds)
         if y_train is not None:
             model.fit(X_train, y_train)
         else:
             model.fit(X_train)
-        return {"model": model, "best_params": {}, "best_score": 0.0}
+        return {"model": model, "best_params": {}, "best_score": baseline_score}
 
     def objective(trial: optuna.Trial) -> float:
         params: dict[str, Any] = {}
@@ -441,13 +504,47 @@ def _tune_model(
                 continue
         return -1.0
 
+    # Baseline (default-params) CV score — safe fallback when tuning makes it worse,
+    # and ensures we never return a tuned model that's worse than vanilla defaults.
+    baseline_model = instantiate_model(task_type, algo_key)
+    baseline_score = _baseline_cv_score(baseline_model, task_type, X_train, y_train, cv_folds)
+
+    # Adaptive trial count — tuned for speed on small datasets and depth on large.
+    # 8 trials per tunable dimension is the search-space rule of thumb; we then
+    # CAP based on dataset size so tiny datasets don't pay for huge Optuna runs
+    # that won't generalize better than a modest search would.
+    n_tunable = len(tunable)
+    adaptive_trials = max(n_trials, n_tunable * 8)
+    n_rows = len(X_train)
+    if n_rows < 500:
+        adaptive_trials = min(adaptive_trials, max(n_trials, 15))   # tiny → fast
+    elif n_rows < 2000:
+        adaptive_trials = min(adaptive_trials, max(n_trials, 30))   # small → moderate
+    else:
+        adaptive_trials = min(adaptive_trials, 80)                  # large → full search
+    log.info("    %s tuning: trials=%d (requested=%d, tunable=%d, rows=%d) baseline=%.4f",
+             entry["display_name"], adaptive_trials, n_trials, n_tunable, len(X_train), baseline_score)
+
     study = optuna.create_study(direction="maximize")
     study.optimize(
         objective,
-        n_trials=n_trials,
+        n_trials=adaptive_trials,
         callbacks=[lambda _study, _trial: gc.collect()],
         show_progress_bar=False,
     )
+
+    tuned_score = float(study.best_value)
+
+    # Safe fallback: if tuning failed to beat default params, keep defaults.
+    # This guarantees tuning can never make a model worse than out-of-the-box.
+    if tuned_score < baseline_score:
+        log.info("    %s fallback: tuned=%.4f < baseline=%.4f → keeping default params",
+                 entry["display_name"], tuned_score, baseline_score)
+        if y_train is not None:
+            baseline_model.fit(X_train, y_train)
+        else:
+            baseline_model.fit(X_train)
+        return {"model": baseline_model, "best_params": {}, "best_score": baseline_score}
 
     best_params = study.best_params
     best_model = instantiate_model(task_type, algo_key, best_params)
@@ -456,7 +553,7 @@ def _tune_model(
     else:
         best_model.fit(X_train)
 
-    return {"model": best_model, "best_params": best_params, "best_score": study.best_value}
+    return {"model": best_model, "best_params": best_params, "best_score": tuned_score}
 
 
 # ── Step 7: AI Summary ──────────────────────────────────────────────────────
@@ -502,6 +599,7 @@ def run_training(
     model_id: str | None = None,
     conversation_id: str = "",
     dataset_id: str = "",
+    progress_callback: Any = None,
 ) -> dict:
     """Run the full Auto ML training pipeline.
 
@@ -509,6 +607,17 @@ def run_training(
     """
     t0 = time.time()
     log.info(">>> Training pipeline  rows=%d  cols=%d  target=%s", len(data), len(columns), target_column)
+
+    def _emit(phase: str, **extra: Any) -> None:
+        """Notify the caller of pipeline progress. Never raises."""
+        if progress_callback is None:
+            return
+        try:
+            progress_callback({"phase": phase, "elapsed": time.time() - t0, **extra})
+        except Exception as exc:  # never break training because of a callback
+            log.debug("progress_callback raised: %s", exc)
+
+    _emit("preprocessing")
 
     # Build DataFrame
     df = pd.DataFrame(data, columns=columns) if columns else pd.DataFrame(data)
@@ -528,6 +637,16 @@ def run_training(
     class_names = prep["class_names"]
     log.info("  Preprocessed: X_train=%s  X_test=%s  features=%d", X_train.shape, X_test.shape, len(feature_names))
 
+    # Capture small references needed at Step 7 before releasing the bulky copies
+    df_shape = df.shape
+    log_target = bool(prep.get("log_target", False))
+    pipeline_bundle = {
+        "scaler": prep["scaler"],
+        "encoders": prep["encoders"],
+        "label_encoder": prep["label_encoder"],
+        "log_target": log_target,
+    }
+
     # Release raw DataFrame + preprocessing dict — both held duplicate copies of training data
     del df, prep
     gc.collect()
@@ -542,10 +661,16 @@ def run_training(
     registry = get_algorithms_for_task(detected_task)
     log.info("  Algorithms: %s", [registry[k]["display_name"] for k in algo_keys])
 
+    _emit("cv", total_algos=len(algo_keys),
+          algos=[registry[k]["display_name"] for k in algo_keys])
+
     # Step 4: Cross-validate
     cv_results = _cross_validate_all(algo_keys, detected_task, X_train, y_train, cv_folds)
     if not cv_results:
+        _emit("error", error="All algorithms failed during cross-validation.")
         return {"success": False, "error": "All algorithms failed during cross-validation."}
+
+    _emit("cv_done", algos_completed=len(cv_results))
 
     # Sort by primary metric
     def _primary_metric(r: dict) -> float:
@@ -566,6 +691,7 @@ def run_training(
         algo_key = cv_results[i]["algo_key"]
         display_name = cv_results[i]["display_name"]
         log.info("  Tuning %d/%d: %s  (%d trials)", i + 1, top_n, display_name, tune_trials)
+        _emit("tuning", current=i + 1, total=top_n, algo=display_name)
         tuned = _tune_model(algo_key, detected_task, X_train, y_train, tune_trials, cv_folds)
         tuned_results.append({
             "algo_key": algo_key,
@@ -573,13 +699,81 @@ def run_training(
             **tuned,
         })
 
-    # Step 6: Final evaluation — pick best tuned model
-    best_tuned = max(tuned_results, key=lambda r: r["best_score"])
-    best_model = best_tuned["model"]
-    best_algo_key = best_tuned["algo_key"]
-    best_display = best_tuned["display_name"]
-    best_params = best_tuned["best_params"]
-    log.info("  Best model: %s (score=%.4f)", best_display, best_tuned["best_score"])
+    _emit("evaluation", total_algos=len(cv_results))
+
+    # Step 6: Evaluate EVERY algorithm on the held-out test set so the comparison
+    # table and the headline use the same numbers (same data, same scale).
+    # This guarantees the #1 row in the table matches the "Best Model" headline.
+    if detected_task in ("classification", "regression"):
+        log.info("  Test-set evaluation for comparison table (%d algos)…", len(cv_results))
+        for cv_entry in cv_results:
+            algo_key = cv_entry["algo_key"]
+            # Prefer the tuned model if this algo was in the top 3
+            model = next((t["model"] for t in tuned_results if t["algo_key"] == algo_key), None)
+            if model is None:
+                model = instantiate_model(detected_task, algo_key)
+                try:
+                    if y_train is not None:
+                        model.fit(X_train, y_train)
+                    else:
+                        model.fit(X_train)
+                except Exception as exc:
+                    log.warning("    Fit failed for %s: %s", cv_entry["display_name"], exc)
+                    continue
+            try:
+                y_pred_test = model.predict(X_test)
+            except Exception as exc:
+                log.warning("    Predict failed for %s: %s", cv_entry["display_name"], exc)
+                continue
+
+            # Keep predictions and y_test on whatever scale training used.
+            # If log_target was applied, metrics stay on log scale — consistent
+            # with the CV scoring metric and dataset-agnostic.
+            y_test_eval = y_test
+
+            try:
+                if detected_task == "classification":
+                    y_prob_test = model.predict_proba(X_test) if hasattr(model, "predict_proba") else None
+                    tm = compute_classification_metrics(y_test_eval, y_pred_test, y_prob_test, class_names)
+                    cv_entry["cv_metrics"] = {
+                        "accuracy_mean": float(tm.get("accuracy", 0.0)),
+                        "f1_mean": float(tm.get("f1", 0.0)),
+                        "precision_mean": float(tm.get("precision", 0.0)),
+                        "recall_mean": float(tm.get("recall", 0.0)),
+                        "accuracy_std": 0.0, "f1_std": 0.0,
+                        "precision_std": 0.0, "recall_std": 0.0,
+                    }
+                else:
+                    tm = compute_regression_metrics(y_test_eval, y_pred_test, len(feature_names))
+                    cv_entry["cv_metrics"] = {
+                        "rmse_mean": float(tm.get("rmse", 0.0)),
+                        "mae_mean": float(tm.get("mae", 0.0)),
+                        "r2_mean": float(tm.get("r2", 0.0)),
+                        "rmse_std": 0.0, "mae_std": 0.0, "r2_std": 0.0,
+                    }
+                cv_entry["model"] = model
+            except Exception as exc:
+                log.warning("    Metrics failed for %s: %s", cv_entry["display_name"], exc)
+
+    # Re-sort by primary metric — now reflects true test-set performance.
+    cv_results.sort(key=_primary_metric, reverse=True)
+
+    # Best model = #1 in the comparison table (same data, same scale ⇒ matches headline)
+    best_cv = cv_results[0]
+    best_tuned = next((t for t in tuned_results if t["algo_key"] == best_cv["algo_key"]), None)
+    if best_tuned is not None:
+        best_model = best_tuned["model"]
+        best_algo_key = best_tuned["algo_key"]
+        best_display = best_tuned["display_name"]
+        best_params = best_tuned["best_params"]
+    else:
+        best_model = best_cv["model"]
+        best_algo_key = best_cv["algo_key"]
+        best_display = best_cv["display_name"]
+        best_params = {}
+    log.info("  Best model: %s (primary=%.4f)", best_display, _primary_metric(best_cv))
+
+    _emit("charts")
 
     # Get predictions
     if detected_task == "clustering":
@@ -593,7 +787,18 @@ def run_training(
     else:
         y_pred = best_model.predict(X_test)
         y_prob = None
+        # Keep on training scale (log if log_target was applied) so headline
+        # metrics match the comparison table exactly — generic across datasets.
+        # /predict still expm1s for human-readable predictions (predict_agent.py).
         final_metrics = compute_regression_metrics(y_test, y_pred, len(feature_names))
+
+        # For chart interpretability (residual plot, actual-vs-predicted),
+        # show values in the original unit (e.g., dollars) not log. The metrics
+        # above already locked-in their log-scale numbers for the headline,
+        # so mutating these is safe. Learning curve still trains on log y_train.
+        if log_target:
+            y_pred = np.expm1(y_pred)
+            y_test = np.expm1(y_test)
 
     # Build comparison table
     comparison_table = []
@@ -650,12 +855,9 @@ def run_training(
             except Exception:
                 clf_report = ""
 
-    # Step 7: Save model
-    pipeline_bundle = {
-        "scaler": prep["scaler"],
-        "encoders": prep["encoders"],
-        "label_encoder": prep["label_encoder"],
-    }
+    _emit("finalizing")
+
+    # Step 7: Save model as draft (user must explicitly promote via /train/models/{id}/save)
     saved = save_model(
         model=best_model,
         pipeline=pipeline_bundle,
@@ -669,7 +871,8 @@ def run_training(
         metrics={k: round(v, 4) for k, v in final_metrics.items()},
         hyperparameters=best_params,
         training_duration=time.time() - t0,
-        dataset_shape=(df.shape[0], df.shape[1]),
+        dataset_shape=(df_shape[0], df_shape[1]),
+        is_draft=True,
     )
 
     # AI summary
@@ -694,6 +897,6 @@ def run_training(
         "classification_report": clf_report,
         "ai_summary": ai_summary,
         "download_url": f"/train/models/{saved['model_id']}/download",
-        "dataset_shape": [df.shape[0], df.shape[1]],
+        "dataset_shape": [df_shape[0], df_shape[1]],
         "training_duration": round(duration, 1),
     }

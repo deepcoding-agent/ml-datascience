@@ -139,6 +139,27 @@ if os.environ.get("LOG_LEVEL", "info").lower() == "debug":
     app.include_router(debug_router)
 
 
+# ── Startup hooks ───────────────────────────────────────────────────────────
+# Sweep stale training drafts so unsaved models don't accumulate on disk.
+_DRAFT_TTL_SECONDS = int(os.environ.get("DRAFT_TTL_SECONDS", "3600"))
+
+
+@app.on_event("startup")
+async def _cleanup_drafts_on_startup() -> None:
+    from api.agents.model_storage import cleanup_old_drafts
+    from api.routes.train import cleanup_old_job_files
+    try:
+        deleted = cleanup_old_drafts(_DRAFT_TTL_SECONDS)
+        log.info("Startup draft cleanup: removed=%d ttl=%ds", deleted, _DRAFT_TTL_SECONDS)
+    except Exception as exc:  # pragma: no cover — never break startup
+        log.warning("Startup draft cleanup failed: %s", exc)
+    try:
+        deleted = cleanup_old_job_files()
+        log.info("Startup job-file cleanup: removed=%d", deleted)
+    except Exception as exc:  # pragma: no cover
+        log.warning("Startup job-file cleanup failed: %s", exc)
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}

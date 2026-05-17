@@ -148,6 +148,10 @@ def run_prediction(
         log.exception("model.predict failed for model %s", model_id)
         return {"success": False, "error": f"Prediction failed: {exc}"}
 
+    # Reverse log1p applied to the target during training, if any.
+    if task_type == "regression" and bool(pipeline.get("log_target", False)):
+        preds = np.expm1(np.asarray(preds, dtype=float))
+
     label_encoder = pipeline.get("label_encoder")
     if label_encoder is not None:
         try:

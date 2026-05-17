@@ -186,3 +186,7 @@ environment_ds4b_301p_dev.yml
 api/handlers/generated/*.py
 !api/handlers/generated/__init__.py
 package-lock.json
+
+# Saved trained models (.joblib + metadata) and async training job snapshots
+models/
+training_jobs/
