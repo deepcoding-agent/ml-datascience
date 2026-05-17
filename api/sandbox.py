@@ -3,11 +3,19 @@ Code sandbox — executes LLM-generated Python safely in an isolated namespace.
 
 matplotlib is configured once at import time (Agg backend).
 numpy is imported once at module level and injected into every sandbox run.
+
+Hardening (Sprint 7):
+- Import blocklist via overridden ``__builtins__["__import__"]`` (os, subprocess,
+  socket, requests, etc. cannot be imported from user code).
+- 30-second wall-clock timeout per ``run_code`` call via worker thread.
 """
 from __future__ import annotations
 
 import base64
+import builtins
 import io
+import os
+import threading
 from contextlib import redirect_stdout
 from typing import Any
 
@@ -17,6 +25,34 @@ import pandas as pd
 from api.logger import get_logger
 
 log = get_logger(__name__)
+
+# ── Sandbox safety ────────────────────────────────────────────────────────────
+# Modules user-generated code may NOT import. The library modules we pre-inject
+# (pandas, numpy, plotly, seaborn, …) are unaffected because they go through the
+# normal module loader at import time, before the sandbox namespace is built.
+_BLOCKED_MODULES: frozenset[str] = frozenset({
+    "os", "subprocess", "shutil", "pathlib", "sys",
+    "socket", "ssl", "ctypes", "multiprocessing", "threading",
+    "requests", "urllib", "urllib3", "http", "httpx",
+    "ftplib", "smtplib", "telnetlib",
+    "importlib", "pkgutil", "runpy",
+})
+
+_real_import = builtins.__import__
+
+
+def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
+    """Reject imports of blocked roots; allow everything else."""
+    root = name.split(".", 1)[0]
+    if root in _BLOCKED_MODULES:
+        raise ImportError(f"Sandbox: import of '{name}' is not allowed")
+    return _real_import(name, globals, locals, fromlist, level)
+
+
+_SANDBOX_BUILTINS: dict[str, Any] = {**vars(builtins), "__import__": _safe_import}
+
+# Wall-clock timeout for a single run_code call.
+_SANDBOX_TIMEOUT_SECONDS = int(os.environ.get("SANDBOX_TIMEOUT_SECONDS", "30"))
 
 # ── matplotlib — configure non-interactive backend + Thai font support ────────
 try:
@@ -108,6 +144,9 @@ def run_code(
     Execute *code* in a restricted namespace containing `df`, `pd`, `np`,
     `sns`, `msno`, `px`, `go`, and optionally extra named DataFrames.
 
+    Wraps the exec in a worker thread with a 30s wall-clock timeout, and
+    overrides ``__import__`` so user code cannot import blocked modules.
+
     Returns
     -------
     (stdout, result_df, chart_base64, sandbox_df, chart_json)
@@ -117,6 +156,36 @@ def run_code(
       sandbox_df   — state of `df` after execution (may differ if mutated)
       chart_json   — first captured Plotly figure as a JSON string
     """
+    # Default failure return — used if the worker thread doesn't return.
+    timeout_result: tuple[str, None, None, None, None] = (
+        f"Code execution timed out (>{_SANDBOX_TIMEOUT_SECONDS}s wall-clock limit)",
+        None, None, None, None,
+    )
+    holder: list[tuple] = []
+
+    def _worker() -> None:
+        holder.append(_execute(code, df, extra_dfs))
+
+    t = threading.Thread(target=_worker, daemon=True, name="sandbox-exec")
+    t.start()
+    t.join(timeout=_SANDBOX_TIMEOUT_SECONDS)
+
+    if t.is_alive():
+        log.warning("Sandbox exec exceeded %ds — abandoning thread", _SANDBOX_TIMEOUT_SECONDS)
+        return timeout_result
+
+    if not holder:
+        return ("Code execution error: no result returned", None, None, None, None)
+
+    return holder[0]
+
+
+def _execute(
+    code: str,
+    df: pd.DataFrame,
+    extra_dfs: dict[str, pd.DataFrame] | None,
+) -> tuple[str, pd.DataFrame | None, str | None, pd.DataFrame | None, str | None]:
+    """Run the user code inline; see ``run_code`` for the threaded wrapper."""
     buf = io.StringIO()
     captured_charts: list[str] = []
     captured_plotly: list[str] = []
@@ -139,6 +208,9 @@ def run_code(
     else:
         original_show = None
         ns = {"df": df, "pd": pd, "np": np}
+
+    # Inject restricted __builtins__ so user code cannot import blocked modules
+    ns["__builtins__"] = _SANDBOX_BUILTINS
 
     # Inject seaborn
     if _SNS:

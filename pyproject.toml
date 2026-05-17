@@ -1,0 +1,35 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+  "unit: fast, isolated tests",
+  "integration: hit real endpoints / agents",
+]
+
+[tool.coverage.run]
+source = ["api"]
+omit = [
+  "api/sandbox.py",            # sandbox runs untrusted exec(); not coverage-meaningful
+  "api/handlers/*",            # 417 handlers — Sprint 6 will add targeted coverage
+  "ai_data_science_team/*",    # vendored, unused
+  "apps/*",                    # streamlit demos, unused
+]
+
+[tool.coverage.report]
+# TODO Sprint 6: ramp fail_under to 80 once test suite exists.
+fail_under = 0
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["ai_data_science_team", "apps", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501",  # line length is handled by formatter
+  "B008",  # FastAPI uses Depends() in defaults — idiomatic
+]

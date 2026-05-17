@@ -1,0 +1,49 @@
+# Render Blueprint for PrepPilot backend.
+# After pushing this file to GitHub:
+#   1. Render dashboard → New → Blueprint → connect this repo → Apply
+#   2. Set the three "sync: false" secrets in the Render UI (Environment tab)
+#   3. Push to main → auto-deploys
+#
+# Plans:
+#   free    — 512MB RAM, sleeps after 15min inactivity, NO persistent disk
+#   starter — 512MB RAM, $7/mo, always-on, supports persistent disk
+#   standard— 2GB RAM,   $25/mo, recommended if ML deps OOM on starter
+
+services:
+  - type: web
+    name: preppilot-backend
+    runtime: docker
+    plan: starter           # change to "free" for sleeping free tier
+    region: singapore       # closest to Thai users
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true        # redeploy on every push to the connected branch
+
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: LOG_LEVEL
+        value: info
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-6
+      - key: SANDBOX_TIMEOUT_SECONDS
+        value: "30"
+      - key: MODELS_DIR
+        value: /app/models
+      # Secrets — set values in Render dashboard (Environment tab).
+      # sync: false means "this key is required but its value lives in the dashboard, not in git".
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+    # Persistent disk for .joblib model artefacts (Starter plan and above only).
+    # Remove this entire block if you switch plan to "free".
+    disk:
+      name: preppilot-models
+      mountPath: /app/models
+      sizeGB: 1

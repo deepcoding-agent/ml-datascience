@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from api.llm import format_history_for_prompt
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -20,6 +21,15 @@ Write Python code for this data-science task:
 
 ## COLUMN DTYPES
 {dtypes}
+
+## CONVERSATION HISTORY (recent turns — use only if the task references them)
+{conversation_history}
+
+> History rule: most tasks are self-contained — IGNORE the history block above
+> unless the current task explicitly leans on prior context (pronouns like
+> "it/them/that", references to "the previous result", "same column",
+> "drop X too", "now compare it with Y"). If the task is self-contained,
+> behave as if no history exists.
 
 ## MANDATORY RULES
 1. The DataFrame is already loaded as `df` — NEVER reload or redefine it.
@@ -147,6 +157,7 @@ def generate_step_code(
     produces: str,
     llm,
     previous_error: str | None = None,
+    history: list | None = None,
 ) -> str:
     """Generate executable Python code for a single step."""
     dtypes_str = "\n".join(
@@ -159,6 +170,7 @@ def generate_step_code(
         dtypes=dtypes_str,
         produces=produces,
         previous_error=previous_error or "None — first attempt",
+        conversation_history=format_history_for_prompt(history),
     )
 
     response = llm.invoke(prompt)

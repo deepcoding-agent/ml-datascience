@@ -1,0 +1,33 @@
+# Docker-based CI fallback for the FastAPI backend.
+# Runs the same checks as .github/workflows/ci.yml on any host with Docker.
+# Usage:
+#   docker compose -f ci/docker-compose.ci.yml run --rm imports
+#   docker compose -f ci/docker-compose.ci.yml run --rm test
+#   docker compose -f ci/docker-compose.ci.yml run --rm lint
+#   docker compose -f ci/docker-compose.ci.yml run --rm security
+
+services:
+  base: &base
+    image: python:3.13-slim
+    working_dir: /app
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: "info"
+
+  imports:
+    <<: *base
+    command: sh -c "pip install --upgrade pip && pip install -r requirements.txt && python -c 'from api.main import app; print(\"OK\")'"
+
+  lint:
+    <<: *base
+    command: sh -c "pip install --upgrade pip && pip install -r requirements-dev.txt && ruff check api/ || true"
+
+  test:
+    <<: *base
+    command: sh -c "pip install --upgrade pip && pip install -r requirements.txt -r requirements-dev.txt && pytest --cov=api --cov-report=term-missing"
+
+  security:
+    <<: *base
+    command: sh -c "pip install bandit && bandit -r api/ -ll -ii || true"

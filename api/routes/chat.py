@@ -1,7 +1,9 @@
 """POST /chat — route the request to the coding or data-science agent."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from api.agents.coding import run_coding_agent
 from api.agents.datascience import run_datascience_agent
@@ -12,9 +14,13 @@ from api.models import ChatRequest, ChatResponse
 router = APIRouter()
 log = get_logger(__name__)
 
+# Rate limit /chat — bounds LLM spend if someone hammers the endpoint.
+limiter = Limiter(key_func=get_remote_address)
+
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+@limiter.limit("60/minute")
+async def chat(request: Request, req: ChatRequest) -> ChatResponse:
     model_id = req.model_id or get_default_model_id()
     mode = "ds-agent" if req.datasets else "coding-agent"
     log.info(

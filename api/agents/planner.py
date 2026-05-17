@@ -20,46 +20,46 @@ log = get_logger(__name__)
 
 HANDLER_CATALOG = """\
 ### Stats Summary (instant query — descriptive statistics, profiles, reports)
-| id | what it does | params |
-|----|-------------|--------|
-| stats.shape | row/column count, memory, duplicates | (none) |
-| stats.describe | full profile: dtype, nulls, mean/std/min/quartiles/max for numeric, top/freq for categorical | column? |
-| stats.null_report | null counts + percentages per column | (none) |
-| stats.dtypes | column data types, null%, unique counts | (none) |
-| stats.value_counts | top value frequencies for one column | column?, n? |
-| stats.unique_values | unique value count per column | (none) |
-| stats.skewness | skewness per numeric column | (none) |
-| stats.outlier_report | IQR-based outlier detection | (none) |
-| stats.duplicate_report | duplicate row count + sample | (none) |
-| stats.cross_tab | contingency table between 2 columns + heatmap | columns (list of 2), normalize? |
-| stats.percentile | custom percentile report (p1, p5, p10...p99) | column?, quantiles? |
-| stats.class_balance | target class distribution + balance check | column? |
-| stats.top_correlations | top N most correlated feature pairs | n? (default 10) |
-| stats.kurtosis | kurtosis per numeric column | (none) |
-| stats.zero_report | count zeros/empty values per column | (none) |
-| stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low) | (none) |
-| stats.mode_report | mode values per column | (none) |
-| stats.variance_report | variance per numeric column | (none) |
-| stats.range_report | range (max-min) per numeric column | (none) |
-| stats.iqr_report | interquartile range per numeric column | (none) |
-| stats.z_score_report | z-score analysis, flag extreme values | column? |
-| stats.frequency_table | frequency table with cumulative percentage | column? |
-| stats.coefficient_variation | coefficient of variation (CV) per numeric column | (none) |
-| stats.correlation_rank | Spearman rank correlation matrix + heatmap | (none) |
-| stats.entropy_report | Shannon entropy per column | (none) |
-| stats.gini_report | Gini impurity per categorical column | (none) |
-| stats.missing_pattern | which columns tend to be missing together | (none) |
-| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | column? |
-| stats.group_stats | descriptive stats per group (groupby + describe) | column? (group col), value_column? |
-| stats.column_compare | compare two columns statistically | columns (list of 2) |
-| stats.mutual_info_report | mutual information scores between features | column? (target) |
-| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | (none) |
-| stats.ratio_report | compute key ratios between numeric columns | (none) |
-| stats.top_bottom_values | top N and bottom N values of a column | column?, n? (default 5) |
-| stats.memory_report | detailed memory usage per column | (none) |
-| stats.sparsity_report | sparsity analysis (zeros + nulls per column) | (none) |
-| stats.data_sample | random sample with stats summary | n? (default 10) |
-| stats.class_weight_calc | calculate balanced class weights for ML training (sklearn-compatible) | column (target) |
+| id | what it does | output | params |
+|----|-------------|--------|--------|
+| stats.shape | row/column count, memory usage, duplicate count | table | (none) |
+| stats.describe | full profile: dtype, nulls, mean/std/min/quartiles/max per column | table | column? |
+| stats.null_report | null counts + percentages per column, sorted by severity | table | (none) |
+| stats.dtypes | column data types with null% and unique counts | table | (none) |
+| stats.value_counts | value frequencies + PERCENTAGE for one column — use for "กี่เปอร์เซ็นต์/how many percent/proportion" | table | column?, n? |
+| stats.unique_values | unique value count per column | table | (none) |
+| stats.skewness | skewness per numeric column (detects asymmetry) | table | (none) |
+| stats.outlier_report | IQR-based outlier detection with count per column | table | (none) |
+| stats.duplicate_report | duplicate row count + sample of duplicated rows | table | (none) |
+| stats.cross_tab | contingency table (crosstab) between 2 columns + heatmap chart | table+chart | columns (list of 2), normalize? |
+| stats.percentile | custom percentile report (p1, p5, p10...p99) | table | column?, quantiles? |
+| stats.class_balance | target class distribution + imbalance severity | table | column? |
+| stats.top_correlations | top N most correlated pairs with strength label | table | n? (default 10) |
+| stats.kurtosis | kurtosis per numeric column | table | (none) |
+| stats.zero_report | count zeros/empty values per column | table | (none) |
+| stats.cardinality_report | unique ratio analysis (ID-like, binary, high, low cardinality) | table | (none) |
+| stats.mode_report | most frequent value per column | table | (none) |
+| stats.variance_report | variance per numeric column | table | (none) |
+| stats.range_report | range (max-min) per numeric column | table | (none) |
+| stats.iqr_report | interquartile range per numeric column | table | (none) |
+| stats.z_score_report | z-score analysis, flags extreme values (|z|>3) | table | column? |
+| stats.frequency_table | frequency table with cumulative percentage — use for "สัดส่วน/breakdown" | table | column? |
+| stats.coefficient_variation | coefficient of variation (CV) — compare spread across columns | table | (none) |
+| stats.correlation_rank | Spearman rank correlation matrix + heatmap chart | table+chart | (none) |
+| stats.entropy_report | Shannon entropy per column (measures randomness) | table | (none) |
+| stats.gini_report | Gini impurity per categorical column | table | (none) |
+| stats.missing_pattern | which columns tend to be missing together (co-occurrence) | table | (none) |
+| stats.quantile_detail | detailed quantiles (1,5,10,25,50,75,90,95,99) | table | column? |
+| stats.group_stats | descriptive stats per group — use for "แต่ละกลุ่มมีค่า X เท่าไหร่" | table | column? (group col), value_column? |
+| stats.column_compare | compare two columns: mean, std, range, distribution | table | columns (list of 2) |
+| stats.mutual_info_report | mutual information scores — which features are most predictive | table | column? (target) |
+| stats.summary_extended | extended summary: mean,median,mode,std,var,range,IQR,skew,kurt | table | (none) |
+| stats.ratio_report | compute key ratios between numeric columns | table | (none) |
+| stats.top_bottom_values | top N and bottom N values — use for "สูงสุด/ต่ำสุด/max/min" | table | column?, n? (default 5) |
+| stats.memory_report | detailed memory usage per column in KB/MB | table | (none) |
+| stats.sparsity_report | sparsity analysis (zeros + nulls percentage per column) | table | (none) |
+| stats.data_sample | random sample of N rows with basic stats | table | n? (default 10) |
+| stats.class_weight_calc | calculate balanced class weights for ML training (sklearn-compatible) | table | column (target) |
 
 ### Stats Test (statistical tests, hypothesis testing, correlation)
 | id | what it does | params |
@@ -423,17 +423,17 @@ HANDLER_CATALOG = """\
 | nlp.named_entity_extract | extract entities (email/url/phone/number/hashtag) from text | column?, entity? (default all) |
 
 ### Analysis Explore (EDA, profiling, quality, trends, comparisons)
-| id | what it does | params |
-|----|-------------|--------|
-| analysis.compare_extremes | compare rows with highest vs lowest value — side-by-side table + chart | column? (numeric col to compare by) |
-| analysis.deep_profile | deep statistical profile of a column: distribution, outliers, quartiles, chart | column? |
-| analysis.group_insights | compare stats across groups of a categorical column + box plot | column? (group col), value_column? (numeric) |
-| analysis.data_quality | comprehensive data quality scores per column + overall score + chart | (none) |
-| analysis.correlation_insights | find top correlations with explanation + scatter plots | n? (default 10) |
-| analysis.compare_columns | side-by-side comparison of two columns: stats + overlapping histogram | columns (list of 2) |
-| analysis.trend_detect | detect trends: direction, slope, moving average + chart | column?, window? (default 5) |
-| analysis.segment_analysis | auto-segment data into quantile groups and describe each | column?, n? (segments, default 4) |
-| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | (none) |
+| id | what it does | output | params |
+|----|-------------|--------|--------|
+| analysis.compare_extremes | compare rows with max vs min value — use for "ถูกสุดกับแพงสุดต่างกันยังไง/cheapest vs most expensive" | table+chart | column? (numeric col to compare by) |
+| analysis.deep_profile | deep statistical profile of one column: distribution, outliers, quartiles | table+chart | column? |
+| analysis.group_insights | compare stats across groups — use for "แต่ละกลุ่มเป็นยังไง/compare by category" | table+chart | column? (group col), value_column? (numeric) |
+| analysis.data_quality | comprehensive data quality scores per column + overall score | table+chart | (none) |
+| analysis.correlation_insights | find top correlations with explanation + scatter plots | table+chart | n? (default 10) |
+| analysis.compare_columns | side-by-side comparison of two columns: stats + histogram | table+chart | columns (list of 2) |
+| analysis.trend_detect | detect trends: direction, slope, moving average | table+chart | column?, window? (default 5) |
+| analysis.segment_analysis | auto-segment into quantile groups and describe each | table | column?, n? (segments, default 4) |
+| analysis.auto_eda | automated EDA: key findings, quality issues, recommendations | table | (none) |
 | analysis.distribution_analysis | distribution shape analysis (skew, kurtosis, normality) per numeric col | (none) |
 | analysis.missing_value_analysis | deep missing value pattern analysis (co-occurrence, MCAR hint) | (none) |
 | analysis.categorical_analysis | deep analysis of all categorical columns (cardinality, mode, entropy) | (none) |
@@ -539,19 +539,68 @@ Scan the handler table above — if ANY handler matches the user's intent, use i
 
 ### When to use codegen
 Use codegen ONLY when NO handler in the table above can do it:
-  - Binning/cutting with custom labels (pd.cut with formatting)
+  - **Binning/cutting** — "แบ่งเป็น N ระดับ", "split into N levels/bins/ranges" → ALWAYS codegen with pd.cut, never viz.bar_chart
   - Custom calculations (percentages, ratios, derived metrics)
   - Pivot, melt, reshape, merge, join
   - Moving average, rolling window, cumulative operations
   - Complex multi-condition filtering
   - Any custom math/logic not covered by a handler
+IMPORTANT: if user says "แบ่ง/split/divide into N levels/bins" → this is a CODEGEN task (pd.cut), NOT a handler task
+
+### Multi-dataset: which dataframe does each step run on?
+The primary dataframe is `df`. Any "Additional datasets available as variables" listed
+above are also loaded and available by their variable name.
+
+For EACH step you emit, you MAY add an optional field `"dataset": "<variable_name>"`
+to tell the executor which dataframe that step targets.
+  - Omitted or `"df"` → run on the primary dataframe (default).
+  - Equal to one of the extra variable names → run on that extra dataframe instead.
+
+NEVER emit two handler steps without `dataset` set when the user mentioned a non-primary
+dataset — step 2 would otherwise just run on step 1's output instead of the intended df.
+
+### CRITICAL CONTRACT: only ONE result table is shown to the user
+The chat surfaces ONE table per response — the result of the LAST step that produces a
+DataFrame. So plan accordingly:
+
+- For ANY comparison / diff / merge / contrast question across datasets (words like
+  "compare", "vs", "difference", "ต่างกัน", "เทียบ", "ระหว่าง"), emit exactly ONE codegen
+  step that builds a single combined DataFrame containing rows/columns from each dataset
+  side by side. Do NOT split into per-dataset handler steps — the user will only see the
+  last one and miss the comparison.
+
+- For "show X for each of A and B" questions, you may still use per-dataset handler
+  steps, but then add ONE final codegen step whose result_df concatenates the per-step
+  outputs into a single labeled table. Otherwise the user only sees the last dataset.
+
+- A codegen step that only prints scalars (e.g. "the difference is 1053") with no
+  result_df leaves the last handler's table as the user-facing artifact — that table
+  almost certainly belongs to a different dataset than what the user is asking about,
+  which is confusing. Always have the final step produce result_df.
 
 ### output_type
   - "query" → stats, viz, questions, any read-only operation
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
-### Chart selection — THINK before picking a chart
-When the user asks for a visualization, REASON about:
+### When to create a chart vs NOT — THINK before adding any visualization
+**Only create a chart when the user explicitly asks for one OR when the answer is genuinely better as a visual.**
+
+DO create a chart when the user says:
+- "show", "plot", "chart", "graph", "visualize", "แสดงกราฟ", "พล็อต", "ดูเป็นภาพ"
+- "distribution of X", "breakdown of X" (implicitly visual)
+
+Do NOT create a chart when the user asks:
+- A question with a short answer: "what is the average price?" → just compute + answer in text
+- A comparison: "cheapest vs most expensive?" → use stats/analysis handlers, return text+table
+- A count: "how many rows have null?" → stats handler, text answer
+- "describe" / "summary" / "info" → stats handler, no chart needed
+- ANY yes/no question: "is there correlation?" → stats.correlation → text answer
+
+**Rule: if the answer can be a number, a sentence, or a small table — do NOT add a chart step.**
+**Only add viz when the user asks for it OR the result truly needs a visual (e.g. distribution of 1000 values).**
+
+### Chart selection — when a chart IS needed
+When the user explicitly asks for a visualization, REASON about:
 1. **What question is the user asking?** — count, composition, distribution, relationship, trend, comparison?
 2. **What does the DATASET section say about the column?** — check dtype, unique count, is it numeric or categorical?
 3. **Pick the chart that BEST answers the question:**
@@ -603,6 +652,13 @@ or refers to something from a previous message:
 3. Use THAT column — do NOT pick a random default column
 Example: if history says "parking value counts" and user says "plot it" → use column="parking"
 
+### Percentage / proportion questions — ALWAYS use stats.value_counts
+When the user asks "how many percent?", "percentage", "proportion", "สัดส่วน", "เปอร์เซ็นต์", "กี่เปอร์เซ็น":
+- Use `stats.value_counts` with the relevant column → it automatically calculates count AND percentage
+- Do NOT use codegen for simple percentage calculations
+- Example: "ห้องนอนแต่ละแบบกี่เปอร์เซ็นต์" → stats.value_counts with column="bedrooms"
+- stats.value_counts already returns: column, count, percentage (count/total*100)
+
 ### Other rules
 1. Column names MUST match actual columns from DATASET section — NEVER invent column names.
 2. Use as many steps as needed to fully answer the request. 1 step for simple tasks, more for complex ones — no upper limit.
@@ -616,6 +672,9 @@ Example: if history says "parking value counts" and user says "plot it" → use 
 10. For "correlation heatmap" → viz.heatmap
 11. If user speaks Thai, understand the intent and plan normally — do NOT translate.
 12. For multi-step requests ("clean then show chart"), create multiple steps spanning categories.
+13. For "percentage" / "เปอร์เซ็นต์" / "สัดส่วน" of a column → stats.value_counts (already includes percentage)
+14. **NO duplicate chart steps** — if a codegen step already creates a chart (px.bar, px.scatter, go.Figure, px.pie, etc.), do NOT add a separate viz handler step after it. One chart per request is enough.
+15. For binning + plot requests ("แบ่งเป็น N ระดับ แล้ว plot") → use ONE codegen step that does both pd.cut AND creates the chart. Do NOT split into codegen + viz.bar_chart.
 
 ## OUTPUT FORMAT — valid JSON, no markdown fences, no explanation
 
@@ -643,6 +702,9 @@ User: "fill missing values with median"
 User: "show bar chart of bedroom counts"
 {{"understanding":"Bar chart of bedroom distribution","output_type":"query","steps":[{{"step_num":1,"description":"Bar chart of bedrooms","handler":{{"id":"viz.bar_chart","params":{{"column":"BedroomAbvGr"}}}}}}]}}
 
+User: "คิดเป็นอย่างละกี่เปอร์เซ็นต์" (follow-up to a column count)
+{{"understanding":"Calculate percentage for each category","output_type":"query","steps":[{{"step_num":1,"description":"Value counts with percentage","handler":{{"id":"stats.value_counts","params":{{"column":"bedrooms"}}}}}}]}}
+
 User: "correlation heatmap"
 {{"understanding":"Show correlation heatmap","output_type":"query","steps":[{{"step_num":1,"description":"Correlation heatmap","handler":{{"id":"viz.heatmap","params":{{}}}}}}]}}
 
@@ -654,6 +716,9 @@ User: "remove duplicates then fill missing values"
 
 User: "split price into 5 levels and show percentage"
 {{"understanding":"Bin price into 5 ranges with percentages","output_type":"query","steps":[{{"step_num":1,"description":"Bin price into 5 ranges with count and percentage","codegen":{{"task":"Use pd.cut on the price column with bins=5. Count each bin, calculate percentage. Create result DataFrame with Range/Count/Percentage. Format bin labels as human-readable (34K-154K). Create bar chart: fig = px.bar(result, x='Range', y='Count', title='Price Distribution', text='Count')","produces":"dataframe"}}}}]}}
+
+User: "แบ่งราคาบ้านเป็น 6 ระดับและแสดงว่าแต่ละระดับมีจำนวนเท่าไหร่ plot ให้ดูได้ไหม"
+{{"understanding":"Bin price into 6 ranges and plot bar chart","output_type":"query","steps":[{{"step_num":1,"description":"Bin price into 6 ranges and plot","codegen":{{"task":"Use pd.cut(df['price'], bins=6) to create price ranges. Count each range. Create result DataFrame with columns Range and Count. Format range labels as human-readable numbers. Create bar chart: fig = px.bar(result, x='Range', y='Count', title='Price by Range (6 levels)', text='Count', color='Count', color_continuous_scale=['#FFE0CC','#E8500A'])","produces":"dataframe"}}}}]}}
 
 User: "describe the dataset"
 {{"understanding":"Show descriptive statistics","output_type":"query","steps":[{{"step_num":1,"description":"Descriptive statistics","handler":{{"id":"stats.describe","params":{{}}}}}}]}}
@@ -671,70 +736,72 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, no code fences.
 # ── Stage 1: Sub-category router ────────────────────────────────────────────
 
 ROUTER_PROMPT = """\
-Classify this user message into 1-3 handler sub-categories for a data-science agent.
+You are a router for a data-science agent. A dataset is loaded with columns: {columns}
 
-User: "{user_message}"
-Columns: {columns}
+Recent conversation:
+{history_summary}
 
-Sub-categories (pick from these):
-- stats_summary: describe, shape, nulls, value counts, profiles, reports, class balance, memory
-- stats_test: correlation, normality test, chi2, t-test, ANOVA, KS test, hypothesis, confidence interval
-- clean_values: fill nulls, replace values, clip/remove outliers, SMOTE/oversample/undersample, imputation
-- clean_structure: remove duplicates, drop columns, fix types, rename, standardize, anonymize, PII
-- transform_reshape: filter, sort, group, pivot, merge, reshape, add column, conditional
-- transform_encode: encode (label/onehot/ordinal), scale, bin, cast dtype, datetime, sample, split
-- viz_basic: bar, pie, line, scatter, histogram, count, heatmap, donut, area, bubble
-- viz_advanced: box, violin, treemap, sankey, waterfall, radar, funnel, QQ, density, distribution
-- feature_create: create new features: lag, rolling, datetime, interaction, polynomial, text, encode
-- feature_select: select/rank features: PCA, RFE, Boruta, importance, mutual info; transform: log, sqrt, boxcox
-- nlp_process: text clean, tokenize, stopwords, normalize, translate, dedup, mask PII, augment
-- nlp_extract: TF-IDF, sentiment, word frequency, NER, ngrams, similarity, keyword extract, analysis
-- analysis_explore: EDA, data quality, profiling, trends, segments, comparisons, drift, completeness
-- analysis_model: clustering, anomaly detection, A/B test, regression, hypothesis test, time series, PCA
-- direct_answer: NOT about the dataset — general knowledge, casual chat, math, coding help
+Current user message: "{user_message}"
 
-Rules:
-- Pick 1 sub-category for simple requests ("show nulls" → stats_summary)
-- Pick 2-3 when request spans multiple operations ("SMOTE then select features" → clean_values, feature_select)
-- If user says "then"/"and"/"แล้วก็" → likely multi-category
-- direct_answer: only for questions completely unrelated to the data
+Your job: classify into 1-3 handler categories.
+Use conversation history to understand follow-up questions.
 
-Output ONLY JSON: {{"categories": ["sub_cat1"], "direct_answer": false}}
+Categories (pick from these 7):
+- stats: describe, shape, nulls, value counts, correlation, hypothesis tests, chi2, ANOVA, t-test, compare, min/max, percentage, proportion, class balance
+- clean: fill nulls, remove duplicates, drop columns, fix types, SMOTE, oversample, undersample, clip outliers, rename, anonymize
+- transform: filter, sort, group, pivot, merge, encode, scale, bin, cast dtype, datetime, sample, split, reshape
+- viz: bar, pie, line, scatter, histogram, heatmap, box, violin, treemap, sankey, waterfall, radar, distribution, any chart/plot/graph
+- feature: create features (lag, rolling, interaction, polynomial), select features (PCA, RFE, Boruta, mutual info, variance)
+- nlp: text clean, tokenize, stopwords, translate, TF-IDF, sentiment, NER, word frequency, ngrams, keyword extract
+- analysis: EDA, data quality, profiling, trends, comparisons, clustering, anomaly detection, drift, segment, outlier analysis
+
+IMPORTANT — direct_answer rules:
+- direct_answer=true ONLY when the question has ZERO connection to the loaded dataset
+- Examples: "what is Python?" → direct_answer. "who made you?" → direct_answer
+- If the question could be answered by looking at the data → NOT direct_answer
+- "บ้านราคาถูกสุดกับแพงที่สุดต่างกันยังไง" → stats, analysis (about the data!)
+- "คิดเป็นเปอร์เซ็นต์" → stats (percentage of data values)
+- When in doubt with dataset loaded → route to handlers, never direct_answer
+
+Output ONLY JSON: {{"categories": ["cat1"], "direct_answer": false}}
 Or: {{"categories": [], "direct_answer": true}}"""
 
 
 def _split_catalog_by_category() -> dict[str, str]:
-    """Split HANDLER_CATALOG into per-sub-category sections."""
-    sections: dict[str, str] = {}
+    """Split HANDLER_CATALOG into 7 broad categories (merging sub-categories).
+
+    Catalog headers like "### Stats Summary" and "### Stats Test" both map to "stats".
+    This gives the router fewer, clearer choices while keeping all handlers accessible.
+    """
+    # Map catalog sub-headers → 7 broad categories
+    header_to_cat = {
+        "Stats Summary": "stats",
+        "Stats Test": "stats",
+        "Clean Values": "clean",
+        "Clean Structure": "clean",
+        "Transform Reshape": "transform",
+        "Transform Encode": "transform",
+        "Viz Basic": "viz",
+        "Viz Advanced": "viz",
+        "Feature Create": "feature",
+        "Feature Select": "feature",
+        "NLP Process": "nlp",
+        "NLP Extract": "nlp",
+        "Analysis Explore": "analysis",
+        "Analysis Model": "analysis",
+    }
+
+    sections: dict[str, list[str]] = {}
     current_key = ""
     current_lines: list[str] = []
-
-    # Map catalog headers to sub-category keys
-    category_map = {
-        "Stats Summary": "stats_summary",
-        "Stats Test": "stats_test",
-        "Clean Values": "clean_values",
-        "Clean Structure": "clean_structure",
-        "Transform Reshape": "transform_reshape",
-        "Transform Encode": "transform_encode",
-        "Viz Basic": "viz_basic",
-        "Viz Advanced": "viz_advanced",
-        "Feature Create": "feature_create",
-        "Feature Select": "feature_select",
-        "NLP Process": "nlp_process",
-        "NLP Extract": "nlp_extract",
-        "Analysis Explore": "analysis_explore",
-        "Analysis Model": "analysis_model",
-    }
 
     for line in HANDLER_CATALOG.split("\n"):
         if line.startswith("### "):
             if current_key and current_lines:
-                sections[current_key] = "\n".join(current_lines)
+                sections.setdefault(current_key, []).extend(current_lines)
             header = line[4:].strip()
             current_key = ""
-            # Match longest prefix first
-            for prefix, key in sorted(category_map.items(), key=lambda x: -len(x[0])):
+            for prefix, key in sorted(header_to_cat.items(), key=lambda x: -len(x[0])):
                 if header.startswith(prefix):
                     current_key = key
                     break
@@ -743,9 +810,9 @@ def _split_catalog_by_category() -> dict[str, str]:
             current_lines.append(line)
 
     if current_key and current_lines:
-        sections[current_key] = "\n".join(current_lines)
+        sections.setdefault(current_key, []).extend(current_lines)
 
-    return sections
+    return {k: "\n".join(v) for k, v in sections.items()}
 
 
 _CATALOG_SECTIONS: dict[str, str] = {}
@@ -759,15 +826,55 @@ def _get_catalog_sections() -> dict[str, str]:
     return _CATALOG_SECTIONS
 
 
+def _verify_direct_answer(
+    user_message: str, columns: list[str], model_id: str | None,
+) -> bool:
+    """AI verification: is this question truly unrelated to the loaded dataset?
+
+    Called only when router says direct_answer=true but data is loaded.
+    Returns True if the question IS about the data (should NOT be direct_answer).
+    Uses max_tokens=10 — expects just YES or NO.
+    """
+    from api.llm import get_llm
+
+    prompt = (
+        f'Dataset columns: {", ".join(columns[:15])}\n'
+        f'Question: "{user_message}"\n\n'
+        f"Could this question be answered by looking at or analyzing the dataset? YES or NO"
+    )
+    try:
+        llm = get_llm(temperature=0.0, max_tokens=10, model_id=model_id)
+        answer = llm.invoke(prompt).content.strip().upper()
+        is_about_data = answer.startswith("YES")
+        log.info("  verify direct_answer → question about data? %s", is_about_data)
+        return is_about_data
+    except Exception as e:
+        log.warning("  verify direct_answer failed (%s) → assuming about data", e)
+        return True
+
+
 def _route_categories(
     user_message: str, columns: list[str], model_id: str | None,
+    history: list | None = None,
 ) -> tuple[list[str], bool]:
     """Stage 1: Lightweight LLM call to classify intent into sub-categories."""
     from api.llm import get_llm
 
+    # Build short history summary for router context (last 3 messages, 150 chars each)
+    history_lines = []
+    if history:
+        for msg in history[-3:]:
+            role = msg.role if hasattr(msg, "role") else msg.get("role", "?")
+            content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+            if len(content) > 150:
+                content = content[:150] + "..."
+            history_lines.append(f"{role}: {content}")
+    history_summary = "\n".join(history_lines) if history_lines else "(no previous messages)"
+
     prompt = ROUTER_PROMPT.format(
         user_message=user_message,
         columns=", ".join(columns[:15]),
+        history_summary=history_summary,
     )
 
     try:
@@ -781,15 +888,7 @@ def _route_categories(
         categories = result.get("categories", [])
         direct = result.get("direct_answer", False)
 
-        valid_cats = {
-            "stats_summary", "stats_test",
-            "clean_values", "clean_structure",
-            "transform_reshape", "transform_encode",
-            "viz_basic", "viz_advanced",
-            "feature_create", "feature_select",
-            "nlp_process", "nlp_extract",
-            "analysis_explore", "analysis_model",
-        }
+        valid_cats = {"stats", "clean", "transform", "viz", "feature", "nlp", "analysis"}
         categories = [c for c in categories if c in valid_cats][:3]
 
         log.info("  router → categories=%s, direct_answer=%s", categories, direct)
@@ -842,12 +941,22 @@ def plan_steps(
     # Extract column names for router
     col_match = _re.findall(r"[|]?\s*(\w+)\s*:", df_context[:500])
     columns = col_match[:15] if col_match else []
+    has_data = bool(columns) and bool(df_context.strip())
 
     # Stage 1: Route (lightweight, ~200 tokens)
-    categories, is_direct = _route_categories(user_message, columns, model_id)
+    categories, is_direct = _route_categories(user_message, columns, model_id, history)
+
+    # Stage 1.5: If router says direct_answer but data is loaded,
+    # verify with a second AI call — is the question really unrelated?
+    if is_direct and has_data:
+        is_about_data = _verify_direct_answer(user_message, columns, model_id)
+        if is_about_data:
+            log.info("  router said direct_answer but AI verification says it's about data → overriding")
+            categories = ["stats", "analysis"]
+            is_direct = False
 
     if is_direct:
-        log.info("  router → direct_answer")
+        log.info("  router → direct_answer (verified: not about data)")
         return {
             "understanding": "Not about the dataset",
             "output_type": "text",
@@ -855,10 +964,15 @@ def plan_steps(
             "steps": [],
         }
 
+    # If router returned empty categories (parse failure), use broad fallback
+    if not categories:
+        log.info("  router returned empty categories → broad fallback")
+        categories = ["stats", "analysis"]
+
     # Stage 2: Build focused catalog and plan
     focused_catalog = _build_focused_catalog(categories)
     handler_count = focused_catalog.count("| ")
-    log.info("  focused catalog: %d sub-categories, ~%d handler rows", len(categories), handler_count // 3)
+    log.info("  focused catalog: %d categories, ~%d handler rows", len(categories), handler_count // 3)
 
     prompt = PLANNER_PROMPT.format(
         user_message=user_message,
