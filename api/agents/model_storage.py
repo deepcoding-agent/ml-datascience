@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,8 +42,13 @@ def save_model(
     hyperparameters: dict,
     training_duration: float,
     dataset_shape: tuple[int, int],
+    is_draft: bool = False,
 ) -> dict:
     """Save a trained model + preprocessing pipeline to disk.
+
+    When ``is_draft=True`` the model is hidden from list_models/list_library_models
+    until promoted via ``promote_draft``. Drafts older than the TTL are removed by
+    ``cleanup_old_drafts``.
 
     Returns metadata dict including model_id and file paths.
     """
@@ -74,10 +80,11 @@ def save_model(
         "dataset_shape": list(dataset_shape),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_file": str(model_path),
+        "is_draft": bool(is_draft),
     }
     meta_path.write_text(json.dumps(metadata, indent=2, default=str))
 
-    log.info("Saved model %s (%s) → %s", model_id, algorithm_display, model_path)
+    log.info("Saved %s %s (%s) → %s", "draft" if is_draft else "model", model_id, algorithm_display, model_path)
     return metadata
 
 
@@ -106,11 +113,13 @@ def load_model(model_id: str) -> dict:
 
 
 def list_models(conversation_id: str) -> list[dict]:
-    """List all saved model metadata for a conversation."""
+    """List saved (non-draft) model metadata for a conversation."""
     results = []
     for meta_path in MODELS_DIR.glob("*.json"):
         try:
             meta = json.loads(meta_path.read_text())
+            if meta.get("is_draft"):
+                continue
             if meta.get("conversation_id") == conversation_id:
                 results.append(meta)
         except (json.JSONDecodeError, KeyError):
@@ -169,9 +178,47 @@ def list_library_models() -> list[dict]:
     for meta_path in MODELS_DIR.glob("*.json"):
         try:
             meta = json.loads(meta_path.read_text())
+            if meta.get("is_draft"):
+                continue
             if meta.get("saved_to_library"):
                 results.append(meta)
         except (json.JSONDecodeError, KeyError):
             continue
     results.sort(key=lambda m: m.get("created_at", ""), reverse=True)
     return results
+
+
+def promote_draft(model_id: str) -> dict:
+    """Clear the draft flag on a model so it shows up in list_models / library lists."""
+    meta_path = MODELS_DIR / f"{model_id}.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Model metadata not found: {model_id}")
+    meta = json.loads(meta_path.read_text())
+    meta["is_draft"] = False
+    meta["promoted_at"] = datetime.now(timezone.utc).isoformat()
+    meta_path.write_text(json.dumps(meta, indent=2, default=str))
+    log.info("Promoted draft %s to permanent model", model_id)
+    return meta
+
+
+def cleanup_old_drafts(ttl_seconds: int = 3600) -> int:
+    """Delete drafts whose .joblib file is older than ttl_seconds. Returns count deleted."""
+    cutoff = time.time() - ttl_seconds
+    deleted = 0
+    for meta_path in MODELS_DIR.glob("*.json"):
+        try:
+            meta = json.loads(meta_path.read_text())
+            if not meta.get("is_draft"):
+                continue
+            model_path = MODELS_DIR / f"{meta['model_id']}.joblib"
+            mtime = model_path.stat().st_mtime if model_path.exists() else meta_path.stat().st_mtime
+            if mtime < cutoff:
+                if model_path.exists():
+                    model_path.unlink()
+                meta_path.unlink()
+                deleted += 1
+        except (json.JSONDecodeError, KeyError, OSError):
+            continue
+    if deleted:
+        log.info("Cleaned up %d old draft model(s)", deleted)
+    return deleted

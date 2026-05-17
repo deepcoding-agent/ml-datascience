@@ -167,6 +167,7 @@ zstandard==0.25.0
 imbalanced-learn>=0.12
 boruta>=0.3
 lightgbm>=4.0
+catboost>=1.2
 optuna>=3.6
 slowapi>=0.1.9
 python-multipart>=0.0.6

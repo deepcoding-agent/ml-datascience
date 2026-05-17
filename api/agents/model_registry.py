@@ -36,9 +36,11 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "Random Forest",
             "default_params": {"n_estimators": 100, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 30),
                 "min_samples_split": ("int", 2, 20),
+                "min_samples_leaf": ("int", 1, 10),
+                "max_features": ("categorical", ["sqrt", "log2", None]),
             },
         },
         "extra_trees_clf": {
@@ -46,7 +48,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "Extra Trees",
             "default_params": {"n_estimators": 100, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 30),
                 "min_samples_split": ("int", 2, 20),
             },
@@ -56,7 +58,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "Gradient Boosting",
             "default_params": {"n_estimators": 100, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 50, 300),
+                "n_estimators": ("int", 50, 500),
                 "max_depth": ("int", 3, 10),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "subsample": ("float", 0.6, 1.0),
@@ -67,7 +69,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "AdaBoost",
             "default_params": {"n_estimators": 50, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 30, 200),
+                "n_estimators": ("int", 30, 400),
                 "learning_rate": ("float_log", 0.01, 2.0),
             },
         },
@@ -76,11 +78,14 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "XGBoost",
             "default_params": {"n_estimators": 100, "random_state": 42, "eval_metric": "logloss", "verbosity": 0},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 10),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "subsample": ("float", 0.6, 1.0),
                 "colsample_bytree": ("float", 0.6, 1.0),
+                "reg_alpha": ("float_log", 1e-8, 10.0),
+                "reg_lambda": ("float_log", 1e-8, 10.0),
+                "min_child_weight": ("int", 1, 10),
             },
         },
         "lightgbm_clf": {
@@ -88,7 +93,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "LightGBM",
             "default_params": {"n_estimators": 100, "random_state": 42, "verbosity": -1},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 15),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "num_leaves": ("int", 15, 127),
@@ -126,11 +131,35 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
         "mlp_clf": {
             "class_path": "sklearn.neural_network.MLPClassifier",
             "display_name": "MLP Neural Network",
-            "default_params": {"max_iter": 500, "random_state": 42},
+            "default_params": {"max_iter": 500, "random_state": 42, "early_stopping": True},
             "tunable_params": {
                 "hidden_layer_sizes": ("categorical", [(64,), (128,), (64, 32), (128, 64)]),
                 "learning_rate_init": ("float_log", 0.0001, 0.01),
                 "alpha": ("float_log", 1e-5, 1e-2),
+                "max_iter": ("int", 200, 1500),
+            },
+        },
+        "catboost_clf": {
+            "class_path": "catboost.CatBoostClassifier",
+            "display_name": "CatBoost",
+            "default_params": {"iterations": 300, "random_seed": 42, "verbose": False, "allow_writing_files": False},
+            "tunable_params": {
+                "iterations": ("int", 100, 800),
+                "depth": ("int", 4, 10),
+                "learning_rate": ("float_log", 0.01, 0.3),
+                "l2_leaf_reg": ("float_log", 1.0, 10.0),
+            },
+        },
+        "hist_gb_clf": {
+            "class_path": "sklearn.ensemble.HistGradientBoostingClassifier",
+            "display_name": "Hist Gradient Boosting",
+            "default_params": {"random_state": 42},
+            "tunable_params": {
+                "max_iter": ("int", 100, 600),
+                "max_depth": ("int", 3, 15),
+                "learning_rate": ("float_log", 0.01, 0.3),
+                "l2_regularization": ("float_log", 1e-8, 10.0),
+                "min_samples_leaf": ("int", 10, 50),
             },
         },
     },
@@ -182,9 +211,11 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "Random Forest",
             "default_params": {"n_estimators": 100, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 30),
                 "min_samples_split": ("int", 2, 20),
+                "min_samples_leaf": ("int", 1, 10),
+                "max_features": ("categorical", ["sqrt", "log2", None]),
             },
         },
         "gradient_boosting_reg": {
@@ -192,7 +223,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "Gradient Boosting",
             "default_params": {"n_estimators": 100, "random_state": 42},
             "tunable_params": {
-                "n_estimators": ("int", 50, 300),
+                "n_estimators": ("int", 50, 500),
                 "max_depth": ("int", 3, 10),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "subsample": ("float", 0.6, 1.0),
@@ -203,11 +234,14 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "XGBoost",
             "default_params": {"n_estimators": 100, "random_state": 42, "verbosity": 0},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 10),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "subsample": ("float", 0.6, 1.0),
                 "colsample_bytree": ("float", 0.6, 1.0),
+                "reg_alpha": ("float_log", 1e-8, 10.0),
+                "reg_lambda": ("float_log", 1e-8, 10.0),
+                "min_child_weight": ("int", 1, 10),
             },
         },
         "lightgbm_reg": {
@@ -215,7 +249,7 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "display_name": "LightGBM",
             "default_params": {"n_estimators": 100, "random_state": 42, "verbosity": -1},
             "tunable_params": {
-                "n_estimators": ("int", 50, 500),
+                "n_estimators": ("int", 50, 800),
                 "max_depth": ("int", 3, 15),
                 "learning_rate": ("float_log", 0.01, 0.3),
                 "num_leaves": ("int", 15, 127),
@@ -238,6 +272,29 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
             "tunable_params": {
                 "n_neighbors": ("int", 3, 25),
                 "weights": ("categorical", ["uniform", "distance"]),
+            },
+        },
+        "catboost_reg": {
+            "class_path": "catboost.CatBoostRegressor",
+            "display_name": "CatBoost",
+            "default_params": {"iterations": 300, "random_seed": 42, "verbose": False, "allow_writing_files": False},
+            "tunable_params": {
+                "iterations": ("int", 100, 800),
+                "depth": ("int", 4, 10),
+                "learning_rate": ("float_log", 0.01, 0.3),
+                "l2_leaf_reg": ("float_log", 1.0, 10.0),
+            },
+        },
+        "hist_gb_reg": {
+            "class_path": "sklearn.ensemble.HistGradientBoostingRegressor",
+            "display_name": "Hist Gradient Boosting",
+            "default_params": {"random_state": 42},
+            "tunable_params": {
+                "max_iter": ("int", 100, 600),
+                "max_depth": ("int", 3, 15),
+                "learning_rate": ("float_log", 0.01, 0.3),
+                "l2_regularization": ("float_log", 1e-8, 10.0),
+                "min_samples_leaf": ("int", 10, 50),
             },
         },
     },
@@ -323,6 +380,11 @@ def select_algorithms(
         selected.append("logistic_regression")
         selected.append("random_forest_clf")
         selected.append("xgboost_clf")
+        # CatBoost dominates on larger / categorical-heavy data but is overkill
+        # (and slow) on tiny datasets where its gain is < its cost.
+        if n_rows >= 1000:
+            selected.append("catboost_clf")
+        selected.append("hist_gb_clf")
 
         if n_rows > 5000:
             selected.append("lightgbm_clf")
@@ -340,6 +402,11 @@ def select_algorithms(
         selected.append("random_forest_reg")
         selected.append("xgboost_reg")
         selected.append("lightgbm_reg")
+        # CatBoost dominates on larger / categorical-heavy data but is overkill
+        # (and slow) on tiny datasets where its gain is < its cost.
+        if n_rows >= 1000:
+            selected.append("catboost_reg")
+        selected.append("hist_gb_reg")
         selected.append("gradient_boosting_reg")
         selected.append("ridge")
         selected.append("linear_regression")
