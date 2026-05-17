@@ -219,7 +219,7 @@ def chart_learning_curve(model: Any, X: np.ndarray, y: np.ndarray, task_type: st
 
     try:
         train_sizes, train_scores, val_scores = learning_curve(
-            model, X, y, train_sizes=sizes, cv=cv, scoring=scoring, n_jobs=-1,
+            model, X, y, train_sizes=sizes, cv=cv, scoring=scoring, n_jobs=2,
         )
     except Exception:
         # Fallback: skip learning curve on error

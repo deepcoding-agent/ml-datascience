@@ -11,6 +11,7 @@ Orchestrates the full training pipeline:
 """
 from __future__ import annotations
 
+import gc
 import time
 import warnings
 from typing import Any
@@ -326,7 +327,7 @@ def _cross_validate_all(
                     else:
                         continue
 
-                    cv_results = cross_validate(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1, return_train_score=False)
+                    cv_results = cross_validate(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=2, return_train_score=False)
                     break  # success
                 except ValueError:
                     continue
@@ -369,7 +370,7 @@ def _tune_model(
     task_type: str,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    n_trials: int = 50,
+    n_trials: int = 20,
     cv_folds: int = 5,
 ) -> dict:
     """Tune hyperparameters with Optuna for a single algorithm."""
@@ -434,14 +435,19 @@ def _tune_model(
                         return float(f1_score(y_train, y_pred, average="weighted", zero_division=0))
                     else:
                         return float(-np.sqrt(np.mean((y_train - y_pred) ** 2)))
-                scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
+                scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=2)
                 return float(np.mean(scores))
             except ValueError:
                 continue
         return -1.0
 
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        callbacks=[lambda _study, _trial: gc.collect()],
+        show_progress_bar=False,
+    )
 
     best_params = study.best_params
     best_model = instantiate_model(task_type, algo_key, best_params)
@@ -491,7 +497,7 @@ def run_training(
     task_type: str = "auto",
     algorithms: str | list[str] = "auto",
     cv_folds: int = 5,
-    tune_trials: int = 50,
+    tune_trials: int = 20,
     test_size: float = 0.2,
     model_id: str | None = None,
     conversation_id: str = "",
@@ -521,6 +527,10 @@ def run_training(
     feature_names = prep["feature_names"]
     class_names = prep["class_names"]
     log.info("  Preprocessed: X_train=%s  X_test=%s  features=%d", X_train.shape, X_test.shape, len(feature_names))
+
+    # Release raw DataFrame + preprocessing dict — both held duplicate copies of training data
+    del df, prep
+    gc.collect()
 
     # Step 3: Select algorithms
     if algorithms == "auto":
