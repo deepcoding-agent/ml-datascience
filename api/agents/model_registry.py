@@ -14,11 +14,12 @@ MODEL_REGISTRY: dict[str, dict[str, dict]] = {
         "logistic_regression": {
             "class_path": "sklearn.linear_model.LogisticRegression",
             "display_name": "Logistic Regression",
-            "default_params": {"max_iter": 1000, "random_state": 42},
+            # solver=saga supports L1+L2+elasticnet and multiclass natively,
+            # so we can safely tune C and penalty without invalid combos.
+            "default_params": {"max_iter": 1000, "random_state": 42, "solver": "saga"},
             "tunable_params": {
                 "C": ("float_log", 0.001, 100),
                 "penalty": ("categorical", ["l1", "l2"]),
-                "solver": ("categorical", ["liblinear", "saga"]),
             },
         },
         "decision_tree_clf": {
@@ -380,10 +381,7 @@ def select_algorithms(
         selected.append("logistic_regression")
         selected.append("random_forest_clf")
         selected.append("xgboost_clf")
-        # CatBoost dominates on larger / categorical-heavy data but is overkill
-        # (and slow) on tiny datasets where its gain is < its cost.
-        if n_rows >= 1000:
-            selected.append("catboost_clf")
+        selected.append("catboost_clf")
         selected.append("hist_gb_clf")
 
         if n_rows > 5000:
@@ -402,10 +400,7 @@ def select_algorithms(
         selected.append("random_forest_reg")
         selected.append("xgboost_reg")
         selected.append("lightgbm_reg")
-        # CatBoost dominates on larger / categorical-heavy data but is overkill
-        # (and slow) on tiny datasets where its gain is < its cost.
-        if n_rows >= 1000:
-            selected.append("catboost_reg")
+        selected.append("catboost_reg")
         selected.append("hist_gb_reg")
         selected.append("gradient_boosting_reg")
         selected.append("ridge")

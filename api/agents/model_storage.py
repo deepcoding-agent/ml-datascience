@@ -16,6 +16,7 @@ from typing import Any
 
 import joblib
 
+from api.agents.schema import infer_raw_required_columns
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -65,6 +66,11 @@ def save_model(
     }
     joblib.dump(bundle, model_path, compress=3)
 
+    # Map post-encoding feature names (mainroad_yes, ...) back to raw input columns
+    # (mainroad, ...) so the /predict UI can validate against the user's raw dataset.
+    encoders = (pipeline or {}).get("encoders", {}) or {}
+    raw_feature_columns = infer_raw_required_columns(feature_columns, encoders)
+
     metadata = {
         "model_id": model_id,
         "conversation_id": conversation_id,
@@ -74,6 +80,7 @@ def save_model(
         "algorithm_display": algorithm_display,
         "target_column": target_column,
         "feature_columns": feature_columns,
+        "raw_feature_columns": raw_feature_columns,
         "metrics": metrics,
         "hyperparameters": hyperparameters,
         "training_duration_seconds": training_duration,
