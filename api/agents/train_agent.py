@@ -726,6 +726,7 @@ def run_training(
     conversation_id: str = "",
     dataset_id: str = "",
     progress_callback: Any = None,
+    feature_pipeline_id: str = "",
 ) -> dict:
     """Run the full Auto ML training pipeline.
 
@@ -1004,6 +1005,7 @@ def run_training(
         training_duration=time.time() - t0,
         dataset_shape=(df_shape[0], df_shape[1]),
         is_draft=True,
+        feature_pipeline_id=feature_pipeline_id,
     )
 
     # AI summary

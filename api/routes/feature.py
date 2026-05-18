@@ -12,10 +12,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.agents.feature_agent import analyze, run
+from api.agents.feature_pipeline_storage import load_pipeline, save_pipeline
 from api.logger import get_logger
 from api.models import (
     FeatureAnalyzeRequest,
     FeatureAnalyzeResponse,
+    FeaturePipelineMeta,
     FeatureReportArtifact,
     FeatureRequest,
     FeatureResponse,
@@ -28,6 +30,24 @@ log = get_logger(__name__)
 def _slug(name: str) -> str:
     keep = "".join(c if c.isalnum() or c in "-_" else "_" for c in name).strip("_")
     return keep or "engineered"
+
+
+@router.get("/feature/pipeline/{pipeline_id}", response_model=FeaturePipelineMeta | None)
+async def feature_pipeline_meta(pipeline_id: str) -> FeaturePipelineMeta | None:
+    """Lightweight metadata for a saved feature pipeline — used by /predict UI
+    to show which raw schema the linked pipeline expects."""
+    state = load_pipeline(pipeline_id)
+    if state is None:
+        return None
+    return FeaturePipelineMeta(
+        pipeline_id=state.pipeline_id,
+        source_dataset_name=state.source_dataset_name,
+        raw_columns=state.raw_columns,
+        engineered_columns=state.engineered_columns,
+        target_column=state.target_column,
+        task=state.task,
+        created_at=state.created_at,
+    )
 
 
 @router.post("/feature/analyze", response_model=FeatureAnalyzeResponse)
@@ -67,7 +87,7 @@ async def feature(req: FeatureRequest) -> FeatureResponse:
         )
 
     try:
-        engineered_df, report, train_df, test_df = run(
+        engineered_df, report, train_df, test_df, pipeline_state = run(
             data=req.data,
             config=req.config,
         )
@@ -76,6 +96,14 @@ async def feature(req: FeatureRequest) -> FeatureResponse:
         out_name = f"{base}_features"
         rows = engineered_df.to_dict(orient="records")
 
+        # Persist the fitted pipeline so /predict can replay it on raw input later.
+        pipeline_id = ""
+        if pipeline_state is not None and report.success:
+            try:
+                pipeline_id = save_pipeline(pipeline_state, dataset_name=req.dataset_name)
+            except Exception as exc:
+                log.warning("save_pipeline failed (non-fatal): %s", exc)
+
         resp = FeatureResponse(
             success=report.success,
             dataset_name=out_name,
@@ -83,6 +111,7 @@ async def feature(req: FeatureRequest) -> FeatureResponse:
             rows=rows,
             report=report,
             error=report.error,
+            feature_pipeline_id=pipeline_id,
         )
         if train_df is not None and test_df is not None:
             resp.has_split = True
@@ -90,13 +119,14 @@ async def feature(req: FeatureRequest) -> FeatureResponse:
             resp.test_rows = test_df.to_dict(orient="records")
 
         log.info(
-            "<<< /feature ok rows %d→%d cols %d→%d steps=%d split=%s",
+            "<<< /feature ok rows %d→%d cols %d→%d steps=%d split=%s pipeline=%s",
             report.rows_before,
             report.rows_after,
             report.cols_before,
             report.cols_after,
             len(report.steps),
             resp.has_split,
+            pipeline_id or "(none)",
         )
         return resp
     except Exception as exc:

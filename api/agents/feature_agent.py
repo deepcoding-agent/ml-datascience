@@ -551,6 +551,17 @@ class _PipelineState:
     steps: list[FeatureStep]
     dropped: list[FeatureDroppedItem]
     derived_added: list[str]
+    # Fitted state captured during run() — all the parameters apply_pipeline
+    # needs to replay on new raw data later.
+    raw_columns: list[str]
+    fitted_dropped: list[str]
+    fitted_null_fills: dict[str, dict]
+    fitted_outlier_bounds: dict[str, dict]
+    fitted_derived: list  # list[DerivedFeatureSpec]
+    fitted_encoders: dict[str, dict]
+    fitted_scaler: dict | None
+    fitted_kept_after_selection: list[str] | None
+    fitted_pca: dict | None
 
 
 def _resolve_null_strategy(plan_strategy: str | None, global_default: str, series: pd.Series) -> str:
@@ -578,6 +589,7 @@ def _step_drop_columns(state: _PipelineState, config: FeatureConfig) -> None:
     if to_drop:
         state.df = state.df.drop(columns=to_drop)
         state.steps.append(FeatureStep(kind="drop", detail=f"dropped {len(to_drop)} columns", affected=to_drop))
+        state.fitted_dropped.extend(to_drop)
 
 
 def _step_fill_nulls(state: _PipelineState, config: FeatureConfig) -> None:
@@ -593,25 +605,38 @@ def _step_fill_nulls(state: _PipelineState, config: FeatureConfig) -> None:
             before = len(state.df)
             state.df = state.df.dropna(subset=[col])
             filled[col] = f"drop ({before - len(state.df)} rows)"
+            # NB: "drop" can't be replayed at predict time (we can't drop rows from
+            # the user's prediction input). Record strategy but no fill value.
+            state.fitted_null_fills[col] = {"strategy": "drop"}
             continue
         try:
+            fill_value: object | None = None
             if strategy == "mean" and pd.api.types.is_numeric_dtype(state.df[col]):
-                state.df[col] = state.df[col].fillna(state.df[col].mean())
+                fill_value = float(state.df[col].mean())
+                state.df[col] = state.df[col].fillna(fill_value)
                 filled[col] = "mean"
             elif strategy == "median" and pd.api.types.is_numeric_dtype(state.df[col]):
-                state.df[col] = state.df[col].fillna(state.df[col].median())
+                fill_value = float(state.df[col].median())
+                state.df[col] = state.df[col].fillna(fill_value)
                 filled[col] = "median"
             elif strategy == "mode":
                 mode_vals = state.df[col].mode(dropna=True)
                 if not mode_vals.empty:
-                    state.df[col] = state.df[col].fillna(mode_vals.iloc[0])
+                    fill_value = mode_vals.iloc[0]
+                    if hasattr(fill_value, "item"):
+                        fill_value = fill_value.item()
+                    state.df[col] = state.df[col].fillna(fill_value)
                     filled[col] = "mode"
             elif strategy == "ffill":
                 state.df[col] = state.df[col].ffill().bfill()
                 filled[col] = "ffill"
+                # ffill replays as ffill at predict time (no fixed value)
             elif strategy == "constant" and plan.null_fill_value is not None:
-                state.df[col] = state.df[col].fillna(plan.null_fill_value)
+                fill_value = plan.null_fill_value
+                state.df[col] = state.df[col].fillna(fill_value)
                 filled[col] = f"constant ({plan.null_fill_value})"
+            if col in filled and strategy != "drop":
+                state.fitted_null_fills[col] = {"strategy": strategy, "value": fill_value}
         except Exception as exc:
             log.warning("null fill failed for %s (%s): %s", col, strategy, exc)
     if filled:
@@ -648,6 +673,7 @@ def _step_outliers(state: _PipelineState, config: FeatureConfig) -> None:
                 if clipped:
                     state.df[col] = series.clip(low, high)
                     affected[col] = clipped
+                state.fitted_outlier_bounds[col] = {"low": float(low), "high": float(high)}
             elif strategy == "zscore_remove":
                 mean, std = series.mean(), series.std()
                 if std and std > 0:
@@ -656,12 +682,15 @@ def _step_outliers(state: _PipelineState, config: FeatureConfig) -> None:
                     if removed:
                         state.df = state.df[mask].reset_index(drop=True)
                         affected[col] = removed
+                # NB: zscore_remove is NOT replayed at predict time (we can't drop
+                # rows from prediction input). Bounds not recorded for that reason.
             elif strategy == "winsorize":
                 low, high = series.quantile(0.05), series.quantile(0.95)
                 clipped = int(((series < low) | (series > high)).sum())
                 if clipped:
                     state.df[col] = series.clip(low, high)
                     affected[col] = clipped
+                state.fitted_outlier_bounds[col] = {"low": float(low), "high": float(high)}
         except Exception as exc:
             log.warning("outlier %s failed for %s: %s", strategy, col, exc)
     if affected:
@@ -679,6 +708,7 @@ def _step_derived(state: _PipelineState, config: FeatureConfig) -> None:
     if not config.derived:
         return
     added: list[str] = []
+    fitted: list[DerivedFeatureSpec] = []
     for spec in config.derived:
         if not spec.enabled:
             continue
@@ -700,26 +730,31 @@ def _step_derived(state: _PipelineState, config: FeatureConfig) -> None:
                 elif part == "hour":
                     state.df[spec.name] = col.dt.hour
                 added.append(spec.name)
+                fitted.append(spec)
             elif spec.kind == "ratio" and len(spec.sources) == 2:
                 a, b = spec.sources
                 if a in state.df.columns and b in state.df.columns:
                     denom = state.df[b].replace({0: np.nan})
                     state.df[spec.name] = state.df[a] / denom
                     added.append(spec.name)
+                    fitted.append(spec)
             elif spec.kind == "interaction" and len(spec.sources) == 2:
                 a, b = spec.sources
                 if a in state.df.columns and b in state.df.columns:
                     state.df[spec.name] = state.df[a] * state.df[b]
                     added.append(spec.name)
+                    fitted.append(spec)
             elif spec.kind == "log" and len(spec.sources) == 1:
                 src = spec.sources[0]
                 if src in state.df.columns:
                     state.df[spec.name] = np.log1p(state.df[src].clip(lower=0))
                     added.append(spec.name)
+                    fitted.append(spec)
         except Exception as exc:
             log.warning("derived %s failed: %s", spec.name, exc)
     if added:
         state.derived_added.extend(added)
+        state.fitted_derived.extend(fitted)
         state.steps.append(FeatureStep(kind="derive", detail=f"added {len(added)} derived columns", affected=added))
 
 
@@ -739,36 +774,61 @@ def _step_encode(state: _PipelineState, config: FeatureConfig) -> None:
         try:
             if method == "onehot":
                 dummies = pd.get_dummies(series, prefix=col, dummy_na=False)
-                # cap explosion at 30 cols
                 if dummies.shape[1] > 30:
-                    method = "frequency"
+                    method = "frequency"      # collapse runaway expansion
                 else:
                     state.df = pd.concat([state.df.drop(columns=[col]), dummies], axis=1)
                     applied[col] = "onehot"
+                    state.fitted_encoders[col] = {
+                        "method": "onehot",
+                        "state": {"categories": [str(c) for c in dummies.columns.tolist()]},
+                    }
                     continue
             if method == "label":
                 le = LabelEncoder()
                 state.df[col] = le.fit_transform(series.astype(str).fillna("__nan__"))
                 applied[col] = "label"
+                state.fitted_encoders[col] = {
+                    "method": "label",
+                    "state": {"mapping": {str(v): int(i) for i, v in enumerate(le.classes_)}},
+                }
             elif method == "ordinal":
                 enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
                 state.df[col] = enc.fit_transform(series.astype(str).fillna("__nan__").to_frame()).flatten()
                 applied[col] = "ordinal"
+                state.fitted_encoders[col] = {
+                    "method": "ordinal",
+                    "state": {"categories": [str(c) for c in enc.categories_[0].tolist()]},
+                }
             elif method == "frequency":
                 freqs = series.value_counts(normalize=True)
                 state.df[col] = series.map(freqs).fillna(0)
                 applied[col] = "frequency"
+                state.fitted_encoders[col] = {
+                    "method": "frequency",
+                    "state": {"freq_map": {str(k): float(v) for k, v in freqs.items()}},
+                }
             elif method == "target" and target and target in state.df.columns:
                 tgt = state.df[target]
                 if pd.api.types.is_numeric_dtype(tgt):
-                    means = state.df.groupby(col)[target].transform("mean")
-                    state.df[col] = means
+                    means = state.df.groupby(col)[target].mean().to_dict()
+                    state.df[col] = state.df[col].map(means)
                     applied[col] = "target"
+                    state.fitted_encoders[col] = {
+                        "method": "target",
+                        "state": {
+                            "mean_map": {str(k): float(v) for k, v in means.items()},
+                            "global_mean": float(tgt.mean()),
+                        },
+                    }
                 else:
-                    # fall back to label for non-numeric target
                     le = LabelEncoder()
                     state.df[col] = le.fit_transform(series.astype(str).fillna("__nan__"))
                     applied[col] = "label (fallback)"
+                    state.fitted_encoders[col] = {
+                        "method": "label",
+                        "state": {"mapping": {str(v): int(i) for i, v in enumerate(le.classes_)}},
+                    }
         except Exception as exc:
             log.warning("encode %s failed for %s: %s", method, col, exc)
     if applied:
@@ -797,6 +857,7 @@ def _step_encode(state: _PipelineState, config: FeatureConfig) -> None:
         state.steps.append(
             FeatureStep(kind="drop", detail=f"dropped {len(leftover)} non-encodable columns", affected=leftover)
         )
+        state.fitted_dropped.extend(leftover)
 
 
 def _step_scale(state: _PipelineState, config: FeatureConfig) -> None:
@@ -815,6 +876,22 @@ def _step_scale(state: _PipelineState, config: FeatureConfig) -> None:
         state.steps.append(
             FeatureStep(kind="scale", detail=f"{config.scaling} scaling", affected=numeric_cols)
         )
+        # Capture the fitted per-column parameters so apply_pipeline can replay
+        params: dict[str, dict] = {}
+        if config.scaling == "standard":
+            for c, mean, scale in zip(numeric_cols, scaler.mean_, scaler.scale_):
+                params[c] = {"mean": float(mean), "scale": float(scale)}
+        elif config.scaling == "minmax":
+            for c, mn, mx in zip(numeric_cols, scaler.data_min_, scaler.data_max_):
+                params[c] = {"min": float(mn), "max": float(mx)}
+        elif config.scaling == "robust":
+            for c, center, scale in zip(numeric_cols, scaler.center_, scaler.scale_):
+                params[c] = {"center": float(center), "scale": float(scale)}
+        state.fitted_scaler = {
+            "method": config.scaling,
+            "columns": numeric_cols,
+            "params": params,
+        }
     except Exception as exc:
         log.warning("scaling failed: %s", exc)
 
@@ -934,6 +1011,7 @@ def _step_select(state: _PipelineState, config: FeatureConfig) -> list[FeatureRa
                 affected=keep,
             )
         )
+        state.fitted_kept_after_selection = list(keep)
     return rankings
 
 
@@ -961,6 +1039,12 @@ def _step_reduce(state: _PipelineState, config: FeatureConfig) -> None:
                 metrics={"explained_variance": [round(float(v), 4) for v in pca.explained_variance_ratio_]},
             )
         )
+        state.fitted_pca = {
+            "n_components": int(config.reduction_n_components),
+            "feature_cols": list(numeric_cols),
+            "mean": [float(v) for v in pca.mean_.tolist()],
+            "components": [[float(v) for v in row] for row in pca.components_.tolist()],
+        }
     except Exception as exc:
         log.warning("PCA failed: %s", exc)
 
@@ -968,11 +1052,20 @@ def _step_reduce(state: _PipelineState, config: FeatureConfig) -> None:
 def run(
     data: list[dict],
     config: FeatureConfig,
-) -> tuple[pd.DataFrame, FeatureReportArtifact, pd.DataFrame | None, pd.DataFrame | None]:
-    """Execute the feature pipeline. Returns (engineered_df, report, train_df?, test_df?)."""
+) -> tuple[pd.DataFrame, FeatureReportArtifact, pd.DataFrame | None, pd.DataFrame | None, "FeaturePipelineState | None"]:
+    """Execute the feature pipeline.
+
+    Returns (engineered_df, report, train_df?, test_df?, pipeline_state?).
+    pipeline_state is None when the pipeline crashes; otherwise it contains
+    every fitted parameter `apply_pipeline()` needs to replay this transform
+    on new raw data later (used by /predict).
+    """
+    from api.models import FeaturePipelineState  # local to avoid circular import
+
     started = time.perf_counter()
     df = pd.DataFrame(data)
     rows_before, cols_before = df.shape
+    raw_columns = [str(c) for c in df.columns]
     target = config.target_column if config.target_column and config.target_column in df.columns else None
 
     state = _PipelineState(
@@ -982,6 +1075,15 @@ def run(
         steps=[],
         dropped=[],
         derived_added=[],
+        raw_columns=raw_columns,
+        fitted_dropped=[],
+        fitted_null_fills={},
+        fitted_outlier_bounds={},
+        fitted_derived=[],
+        fitted_encoders={},
+        fitted_scaler=None,
+        fitted_kept_after_selection=None,
+        fitted_pca=None,
     )
 
     try:
@@ -1011,7 +1113,7 @@ def run(
             duration_seconds=round(time.perf_counter() - started, 3),
             error=str(exc),
         )
-        return state.df, report, None, None
+        return state.df, report, None, None, None
 
     train_df = test_df = None
     if config.split == "train_test" and target and target in state.df.columns:
@@ -1052,4 +1154,25 @@ def run(
         derived_columns=state.derived_added,
         duration_seconds=round(time.perf_counter() - started, 3),
     )
-    return state.df, report, train_df, test_df
+
+    # Build the FeaturePipelineState that apply_pipeline() can replay later
+    from datetime import datetime, timezone
+    pipeline_state = FeaturePipelineState(
+        pipeline_id="",  # filled by the route after save()
+        source_dataset_name="",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        task=config.task,
+        target_column=target,
+        raw_columns=raw_columns,
+        engineered_columns=[str(c) for c in state.df.columns],
+        dropped_columns=state.fitted_dropped,
+        null_fills=state.fitted_null_fills,
+        outlier_bounds=state.fitted_outlier_bounds,
+        derived_specs=state.fitted_derived,
+        encoders=state.fitted_encoders,
+        scaler=state.fitted_scaler,
+        kept_after_selection=state.fitted_kept_after_selection,
+        pca=state.fitted_pca,
+    )
+
+    return state.df, report, train_df, test_df, pipeline_state

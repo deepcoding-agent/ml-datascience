@@ -44,6 +44,7 @@ def save_model(
     training_duration: float,
     dataset_shape: tuple[int, int],
     is_draft: bool = False,
+    feature_pipeline_id: str = "",
 ) -> dict:
     """Save a trained model + preprocessing pipeline to disk.
 
@@ -81,6 +82,9 @@ def save_model(
         "target_column": target_column,
         "feature_columns": feature_columns,
         "raw_feature_columns": raw_feature_columns,
+        # When the training input came from /feature, this is the saved pipeline
+        # id /predict can replay to transform raw input data before predicting.
+        "feature_pipeline_id": feature_pipeline_id or "",
         "metrics": metrics,
         "hyperparameters": hyperparameters,
         "training_duration_seconds": training_duration,
