@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from api.agents.feature_pipeline_storage import apply_pipeline, load_pipeline
 from api.agents.model_storage import load_model
 from api.agents.schema import infer_raw_required_columns
 from api.logger import get_logger
@@ -65,8 +66,19 @@ def run_prediction(
     model_id: str,
     rows: list[dict],
     columns: list[str],
+    apply_feature_pipeline: bool | None = None,
 ) -> dict[str, Any]:
-    """Run predictions for ``rows`` using the model identified by ``model_id``."""
+    """Run predictions for ``rows`` using the model identified by ``model_id``.
+
+    When the model was trained on a /feature output, the model metadata stores
+    a feature_pipeline_id. If the incoming columns look like RAW (matching the
+    pipeline's pre-feature column set), this function replays /feature's
+    transforms on the input before predicting — so the user can /predict on
+    raw data even though the model was trained on engineered features.
+
+    Set ``apply_feature_pipeline=True`` to force the replay, ``False`` to skip
+    it, or leave ``None`` (default) to auto-detect by column overlap.
+    """
     log.info(">>> run_prediction  model=%s  rows=%d", model_id, len(rows))
     if not rows:
         return {"success": False, "error": "No rows provided for prediction."}
@@ -82,8 +94,67 @@ def run_prediction(
     target_col: str = bundle.get("target_column") or ""
     task_type: str = bundle.get("task_type") or ""
     encoders = pipeline.get("encoders", {}) or {}
+    metadata = bundle.get("metadata") or {}
+    feature_pipeline_id: str = metadata.get("feature_pipeline_id") or ""
 
     raw_input = pd.DataFrame(rows, columns=columns)
+
+    # ── /feature pipeline replay ────────────────────────────────────────────
+    # If the model was trained on engineered output and the user is now passing
+    # RAW columns, run the saved feature pipeline on the input first.
+    pipeline_applied = False
+    pipeline_skip_reason = ""
+    if feature_pipeline_id:
+        state = load_pipeline(feature_pipeline_id)
+        if state is not None:
+            input_cols = set(raw_input.columns.astype(str))
+            # Detection: when /feature uses label/ordinal/frequency encoding the
+            # column NAMES don't change (only values do), so a set-based heuristic
+            # can't distinguish raw from engineered. Look at dtypes instead: if
+            # any encoder column is still non-numeric in the input, the input
+            # hasn't been through /feature yet.
+            needs_replay = False
+            for col, info in state.encoders.items():
+                if col in input_cols:
+                    method = info.get("method")
+                    if method in ("label", "ordinal", "frequency", "target"):
+                        if not pd.api.types.is_numeric_dtype(raw_input[col]):
+                            needs_replay = True
+                            break
+                elif info.get("method") == "onehot":
+                    # Onehot expands col → col_value sub-columns. If those sub-
+                    # columns are absent from input but the raw col IS present,
+                    # it's raw.
+                    if col in input_cols:
+                        cats = (info.get("state") or {}).get("categories") or []
+                        if cats and not all(c in input_cols for c in cats):
+                            needs_replay = True
+                            break
+            # Also catch the no-encoder case: any raw col not present in engineered_columns
+            extra_raw = [c for c in state.raw_columns if c in input_cols and c not in state.engineered_columns]
+            if extra_raw:
+                needs_replay = True
+
+            if apply_feature_pipeline is True:
+                should_apply = True
+            elif apply_feature_pipeline is False:
+                should_apply = False
+            else:
+                should_apply = needs_replay
+            if should_apply:
+                try:
+                    raw_input = apply_pipeline(raw_input, state)
+                    pipeline_applied = True
+                    log.info(
+                        "Applied feature pipeline %s → %d cols",
+                        feature_pipeline_id, len(raw_input.columns),
+                    )
+                except Exception as exc:
+                    pipeline_skip_reason = f"pipeline replay failed: {exc}"
+                    log.warning(pipeline_skip_reason)
+        else:
+            pipeline_skip_reason = f"linked pipeline {feature_pipeline_id} not found"
+            log.warning(pipeline_skip_reason)
 
     work = raw_input.copy()
     if target_col and target_col in work.columns:
@@ -159,4 +230,7 @@ def run_prediction(
             "n_features_used": len(feature_cols_post),
             "n_input_columns": len(columns),
         },
+        "feature_pipeline_id": feature_pipeline_id,
+        "feature_pipeline_applied": pipeline_applied,
+        "feature_pipeline_skip_reason": pipeline_skip_reason,
     }

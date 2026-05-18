@@ -14,8 +14,6 @@ ALL_MODELS = [
     ModelInfo(id="gpt-5",             label="GPT-5",          provider="openai",    badge="Powerful"),
     ModelInfo(id="gpt-5-mini",        label="GPT-5 mini",     provider="openai",    badge="Smart"),
     ModelInfo(id="gpt-5.4-nano",      label="GPT-5.4 nano",   provider="openai",    badge="Fast"),
-    ModelInfo(id="gpt-4o",            label="GPT-4o",         provider="openai",    badge="Smart"),
-    ModelInfo(id="gpt-4o-mini",       label="GPT-4o mini",    provider="openai",    badge="Fast"),
     ModelInfo(id="claude-haiku-4-5",  label="Claude Haiku",   provider="anthropic", badge="Fast"),
     ModelInfo(id="claude-sonnet-4-6", label="Claude Sonnet",  provider="anthropic", badge="Smart"),
     ModelInfo(id="claude-opus-4-7",   label="Claude Opus",    provider="anthropic", badge="Powerful"),

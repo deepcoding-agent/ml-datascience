@@ -279,6 +279,48 @@ class FeatureResponse(BaseModel):
     test_rows: list[dict] = []
     report: FeatureReportArtifact = FeatureReportArtifact()
     error: str = ""
+    # ID of the saved feature pipeline that can replay this transformation on
+    # new raw data later (used by /predict when input is raw).
+    feature_pipeline_id: str = ""
+
+
+# ── FeaturePipeline — fitted transform state for replay on raw data ──────────
+
+class FeaturePipelineState(BaseModel):
+    """Serializable snapshot of every transform /feature applied — with the
+    fitted parameters needed to replay on new raw data later.
+
+    Stored as JSON next to model artifacts. Linked by id from /train models
+    so /predict can detect raw input and auto-apply the same transforms.
+    """
+    pipeline_id: str
+    source_dataset_name: str = ""
+    created_at: str = ""
+    task: str = "classification"
+    target_column: str | None = None
+    raw_columns: list[str] = []            # input columns BEFORE any transform
+    engineered_columns: list[str] = []     # output columns AFTER all transforms
+
+    # Step state — every value here is what `apply_pipeline` needs at replay
+    dropped_columns: list[str] = []
+    null_fills: dict[str, dict] = {}       # col → {"strategy": str, "value": Any}
+    outlier_bounds: dict[str, dict] = {}   # col → {"low": float, "high": float}
+    derived_specs: list[DerivedFeatureSpec] = []   # only enabled ones
+    encoders: dict[str, dict] = {}         # col → {"method": str, "state": {...}}
+    scaler: dict | None = None             # {"method": str, "columns": [..], "params": {col: {...}}}
+    kept_after_selection: list[str] | None = None  # None = no selection applied
+    pca: dict | None = None                # {"n_components": int, "feature_cols": [..], "mean": [...], "components": [[...]]}
+
+
+class FeaturePipelineMeta(BaseModel):
+    """Lightweight metadata returned to the UI — does not include fitted state."""
+    pipeline_id: str
+    source_dataset_name: str
+    raw_columns: list[str]
+    engineered_columns: list[str]
+    target_column: str | None = None
+    task: str
+    created_at: str
 
 
 # ── /train/analyze — AI-suggested training setup ─────────────────────────────

@@ -77,6 +77,9 @@ class TrainRequest(BaseModel):
     model_id: str | None = None          # LLM model for AI narrative
     conversation_id: str = ""
     dataset_id: str = ""
+    # When the training dataset was produced by /feature, this is the id of
+    # the saved feature pipeline /predict will replay on raw input later.
+    feature_pipeline_id: str = ""
 
 
 class TrainResponse(BaseModel):
@@ -120,6 +123,7 @@ async def train(request: Request, req: TrainRequest) -> TrainResponse:
             model_id=req.model_id,
             conversation_id=req.conversation_id,
             dataset_id=req.dataset_id,
+            feature_pipeline_id=req.feature_pipeline_id,
         )
         log.info("<<< /train done  best=%s  duration=%.1fs",
                  result.get("best_algorithm_display", "N/A"),
@@ -251,6 +255,7 @@ def _run_job(job_id: str, req: "TrainRequest") -> None:
             tune_trials=req.tune_trials, test_size=req.test_size,
             model_id=req.model_id, conversation_id=req.conversation_id,
             dataset_id=req.dataset_id,
+            feature_pipeline_id=req.feature_pipeline_id,
             progress_callback=cb,
         )
         with _JOBS_LOCK:
