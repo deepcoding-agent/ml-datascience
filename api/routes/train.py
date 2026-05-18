@@ -69,6 +69,8 @@ class TrainResponse(BaseModel):
     download_url: str = ""
     dataset_shape: list[int] = []
     training_duration: float = 0.0
+    # Surface of the auto feature-engineering step so the UI can show what was applied.
+    feature_engineering: dict = {}
     error: str = ""
 
 

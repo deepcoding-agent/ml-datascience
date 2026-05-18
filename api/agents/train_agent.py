@@ -205,6 +205,12 @@ def _auto_preprocess(
         except Exception as exc:
             log.warning("  Skew check failed for target: %s", exc)
 
+    # ── Auto Feature Engineering ───────────────────────────────────────────
+    # Runs AFTER encoding (so it sees the real numeric feature space) and
+    # BEFORE scaling (so log-transform is applied to raw values, not z-scores).
+    # Every step is "do no harm" — only drops or transforms, never explodes dims.
+    X, fe_meta = _auto_feature_engineer(X, y, task_type)
+
     feature_names = X.columns.tolist()
 
     # ── Scale numeric features ──
@@ -239,7 +245,104 @@ def _auto_preprocess(
         "scaler": scaler,
         "encoders": encoders,
         "log_target": log_target,
+        "fe_meta": fe_meta,
+        "log_features": fe_meta.get("log_features", []),
     }
+
+
+# ── Step 3.5: Auto Feature Engineering ───────────────────────────────────────
+
+def _auto_feature_engineer(
+    X: pd.DataFrame,
+    y: pd.Series | None,
+    task_type: str,
+) -> tuple[pd.DataFrame, dict]:
+    """Pick and apply feature engineering steps that improve learning.
+
+    Conservative recipe — every step only drops or transforms, never multiplies
+    dimensionality. Safe to apply blindly because nothing here can make a tree
+    or boosting model worse, and most steps help linear / distance-based models.
+
+    Returns: (transformed X, metadata dict for the pipeline bundle)
+    """
+    fe_meta: dict = {}
+    initial_features = X.shape[1]
+
+    # 1. Drop near-zero variance features ─────────────────────────────
+    #    Constant or near-constant columns add no signal. Threshold 0.01
+    #    in the encoded space catches one-hot dummies that are >99% one value.
+    try:
+        variances = X.var(numeric_only=True)
+        lowvar_cols = variances[variances < 0.01].index.tolist()
+        if lowvar_cols:
+            X = X.drop(columns=lowvar_cols)
+            fe_meta["dropped_lowvar"] = lowvar_cols
+            log.info("  FE: dropped %d low-variance features", len(lowvar_cols))
+    except Exception as exc:
+        log.warning("  FE variance step failed: %s", exc)
+
+    # 2. Drop one of each highly correlated pair (>0.95) ──────────────
+    #    Reduces multicollinearity for linear models; harmless for trees.
+    #    Uses upper-triangle scan so each pair is considered once.
+    try:
+        if X.shape[1] >= 2:
+            corr_matrix = X.corr(numeric_only=True).abs()
+            upper = corr_matrix.where(
+                np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+            )
+            dropped_corr = [col for col in upper.columns if (upper[col] > 0.95).any()]
+            if dropped_corr:
+                X = X.drop(columns=dropped_corr)
+                fe_meta["dropped_corr"] = dropped_corr
+                log.info("  FE: dropped %d highly-correlated features", len(dropped_corr))
+    except Exception as exc:
+        log.warning("  FE correlation step failed: %s", exc)
+
+    # 3. Log-transform skewed positive-only features ──────────────────
+    #    np.log1p handles zeros safely; we require values > -1 so log1p is real.
+    #    Skipped on encoded one-hot dummies (only 0/1 values, no skew benefit).
+    log_features: list[str] = []
+    try:
+        for col in X.select_dtypes(include="number").columns:
+            unique_vals = X[col].nunique()
+            if unique_vals <= 2:
+                continue   # binary / one-hot dummy
+            try:
+                skew = float(X[col].skew())
+            except Exception:
+                continue
+            if abs(skew) > 1.5 and bool((X[col] > -1.0).all()):
+                X[col] = np.log1p(X[col])
+                log_features.append(col)
+        if log_features:
+            fe_meta["log_features"] = log_features
+            log.info("  FE: log-transformed %d skewed features", len(log_features))
+    except Exception as exc:
+        log.warning("  FE log-transform step failed: %s", exc)
+
+    # 4. Mutual-info selection for high-dim datasets ──────────────────
+    #    Only fires for n_features > 30 to avoid wasted work on small data.
+    #    Keeps top-K most informative features w.r.t. the target.
+    try:
+        if X.shape[1] > 30 and y is not None and task_type != "clustering":
+            from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+            score_fn = mutual_info_classif if task_type == "classification" else mutual_info_regression
+            mi_scores = score_fn(X.values, y.values, random_state=42)
+            keep_k = min(25, X.shape[1])
+            keep_idx = np.argsort(mi_scores)[-keep_k:]
+            keep_cols = X.columns[keep_idx].tolist()
+            dropped_mi = [c for c in X.columns if c not in keep_cols]
+            X = X[keep_cols]
+            fe_meta["mi_kept"] = keep_cols
+            fe_meta["mi_dropped"] = dropped_mi
+            log.info("  FE: mutual-info kept top %d / %d features", keep_k, len(mi_scores))
+    except Exception as exc:
+        log.warning("  FE mutual-info step failed: %s", exc)
+
+    final_features = X.shape[1]
+    if final_features != initial_features:
+        log.info("  FE summary: %d → %d features", initial_features, final_features)
+    return X, fe_meta
 
 
 # ── Step 4: Cross-validate ───────────────────────────────────────────────────
@@ -424,6 +527,14 @@ def _baseline_cv_score(
     return float("-inf")
 
 
+def _fold_score(task_type: str, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Per-fold score on a maximize scale (classification: f1, regression: -RMSE)."""
+    if task_type == "classification":
+        from sklearn.metrics import f1_score
+        return float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
+    return float(-np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+
 def _tune_model(
     algo_key: str,
     task_type: str,
@@ -432,8 +543,18 @@ def _tune_model(
     n_trials: int = 20,
     cv_folds: int = 5,
 ) -> dict:
-    """Tune hyperparameters with Optuna for a single algorithm."""
+    """Tune hyperparameters with Optuna for a single algorithm.
+
+    Speed optimizations:
+    - Tuning CV uses 3 folds (vs the 5 used for final headline metrics) — same
+      ranking signal, ~40% fewer fits.
+    - MedianPruner kills trials whose first-fold score is below the median —
+      most bad trials die after fold 1 instead of completing all 3.
+    - Trial caps are tightened (10/20/40 vs the old 15/30/80) since the pruner
+      already lets us explore more configurations cheaply.
+    """
     import optuna
+    from optuna.pruners import MedianPruner
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     registry = get_algorithms_for_task(task_type)
@@ -443,7 +564,6 @@ def _tune_model(
     if not tunable:
         # No hyperparameters to search — still need a real CV score on the
         # same metric scale as tuned algos so model selection compares fairly.
-        # (Was returning 0.0, which beat any negative neg_RMSE for regression.)
         model = instantiate_model(task_type, algo_key)
         baseline_score = _baseline_cv_score(model, task_type, X_train, y_train, cv_folds)
         if y_train is not None:
@@ -451,6 +571,10 @@ def _tune_model(
         else:
             model.fit(X_train)
         return {"model": model, "best_params": {}, "best_score": baseline_score}
+
+    # Tuning uses a smaller CV than the final headline eval — the ranking signal
+    # is the same but each trial finishes ~40% faster.
+    tune_folds = min(3, max(2, _safe_cv_folds(y_train, cv_folds, task_type)))
 
     def objective(trial: optuna.Trial) -> float:
         params: dict[str, Any] = {}
@@ -476,56 +600,58 @@ def _tune_model(
             from sklearn.metrics import silhouette_score
             return float(silhouette_score(X_train, labels))
 
-        safe_folds = _safe_cv_folds(y_train, cv_folds, task_type)
-        if task_type == "classification":
-            scoring = "f1_weighted"
-        else:
-            scoring = "neg_root_mean_squared_error"
+        # Manual CV loop so we can stream per-fold scores to the pruner.
+        # cross_val_score doesn't expose intermediates → can't prune mid-trial.
+        try:
+            if task_type == "classification":
+                cv = StratifiedKFold(n_splits=tune_folds, shuffle=True, random_state=42)
+                split_y = y_train
+            else:
+                cv = KFold(n_splits=tune_folds, shuffle=True, random_state=42)
+                split_y = None
 
-        from sklearn.model_selection import cross_val_score
-        # Try stratified → kfold → simple fit
-        for cv_strat in ("stratified", "kfold", "fit"):
-            try:
-                if cv_strat == "stratified" and task_type == "classification":
-                    cv = StratifiedKFold(n_splits=safe_folds, shuffle=True, random_state=42)
-                elif cv_strat == "kfold":
-                    cv = KFold(n_splits=max(2, min(safe_folds, len(X_train))), shuffle=True, random_state=42)
-                else:
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_train)
-                    if task_type == "classification":
-                        from sklearn.metrics import f1_score
-                        return float(f1_score(y_train, y_pred, average="weighted", zero_division=0))
-                    else:
-                        return float(-np.sqrt(np.mean((y_train - y_pred) ** 2)))
-                scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=2)
-                return float(np.mean(scores))
-            except ValueError:
-                continue
-        return -1.0
+            fold_scores: list[float] = []
+            for fold_idx, (tr_idx, val_idx) in enumerate(cv.split(X_train, split_y)):
+                X_tr, X_val = X_train[tr_idx], X_train[val_idx]
+                y_tr, y_val = y_train[tr_idx], y_train[val_idx]
+                model.fit(X_tr, y_tr)
+                fold_scores.append(_fold_score(task_type, y_val, model.predict(X_val)))
+                trial.report(float(np.mean(fold_scores)), step=fold_idx)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+            return float(np.mean(fold_scores))
+        except optuna.TrialPruned:
+            raise
+        except Exception as exc:
+            # Invalid param combo (e.g. liblinear+multiclass, lbfgs+l1) or numeric
+            # failure during fit/predict — mark this trial as a poor candidate so
+            # Optuna moves on instead of crashing the whole tuning run.
+            log.debug("    trial failed in %s (%s) — returning -inf", entry["display_name"], exc)
+            return float("-inf")
 
     # Baseline (default-params) CV score — safe fallback when tuning makes it worse,
     # and ensures we never return a tuned model that's worse than vanilla defaults.
     baseline_model = instantiate_model(task_type, algo_key)
     baseline_score = _baseline_cv_score(baseline_model, task_type, X_train, y_train, cv_folds)
 
-    # Adaptive trial count — tuned for speed on small datasets and depth on large.
-    # 8 trials per tunable dimension is the search-space rule of thumb; we then
-    # CAP based on dataset size so tiny datasets don't pay for huge Optuna runs
-    # that won't generalize better than a modest search would.
+    # Adaptive trial count — tighter caps than before because the pruner
+    # already lets each trial die fast, so total wall-clock stays low.
     n_tunable = len(tunable)
     adaptive_trials = max(n_trials, n_tunable * 8)
     n_rows = len(X_train)
     if n_rows < 500:
-        adaptive_trials = min(adaptive_trials, max(n_trials, 15))   # tiny → fast
+        adaptive_trials = min(adaptive_trials, max(n_trials, 10))   # tiny → fast
     elif n_rows < 2000:
-        adaptive_trials = min(adaptive_trials, max(n_trials, 30))   # small → moderate
+        adaptive_trials = min(adaptive_trials, max(n_trials, 20))   # small → moderate
     else:
-        adaptive_trials = min(adaptive_trials, 80)                  # large → full search
-    log.info("    %s tuning: trials=%d (requested=%d, tunable=%d, rows=%d) baseline=%.4f",
-             entry["display_name"], adaptive_trials, n_trials, n_tunable, len(X_train), baseline_score)
+        adaptive_trials = min(adaptive_trials, 40)                  # large → cap at 40
+    log.info("    %s tuning: trials=%d (requested=%d, tunable=%d, rows=%d, tune_folds=%d) baseline=%.4f",
+             entry["display_name"], adaptive_trials, n_trials, n_tunable, len(X_train), tune_folds, baseline_score)
 
-    study = optuna.create_study(direction="maximize")
+    # MedianPruner: after 3 trials warm-up, kill any trial whose mean-so-far
+    # at the current fold is below the median of completed trials at that fold.
+    pruner = MedianPruner(n_startup_trials=3, n_warmup_steps=1, interval_steps=1)
+    study = optuna.create_study(direction="maximize", pruner=pruner)
     study.optimize(
         objective,
         n_trials=adaptive_trials,
@@ -645,7 +771,12 @@ def run_training(
         "encoders": prep["encoders"],
         "label_encoder": prep["label_encoder"],
         "log_target": log_target,
+        # FE: which encoded features got log-transformed at training time.
+        # predict_agent re-applies np.log1p to these so inference matches training.
+        "log_features": prep.get("log_features", []),
     }
+    # Snapshot FE metadata for the response BEFORE `del prep` below.
+    fe_meta_snapshot = dict(prep.get("fe_meta", {}) or {})
 
     # Release raw DataFrame + preprocessing dict — both held duplicate copies of training data
     del df, prep
@@ -899,4 +1030,11 @@ def run_training(
         "download_url": f"/train/models/{saved['model_id']}/download",
         "dataset_shape": [df_shape[0], df_shape[1]],
         "training_duration": round(duration, 1),
+        "feature_engineering": {
+            "dropped_lowvar":  fe_meta_snapshot.get("dropped_lowvar",  []),
+            "dropped_corr":    fe_meta_snapshot.get("dropped_corr",    []),
+            "log_features":    fe_meta_snapshot.get("log_features",    []),
+            "mi_kept":         fe_meta_snapshot.get("mi_kept",         []),
+            "mi_dropped":      fe_meta_snapshot.get("mi_dropped",      []),
+        },
     }

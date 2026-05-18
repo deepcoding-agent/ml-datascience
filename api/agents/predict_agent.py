@@ -12,48 +12,10 @@ import numpy as np
 import pandas as pd
 
 from api.agents.model_storage import load_model
+from api.agents.schema import infer_raw_required_columns
 from api.logger import get_logger
 
 log = get_logger(__name__)
-
-
-def _infer_raw_required_columns(
-    feature_cols_post: list[str],
-    encoders: dict,
-) -> list[str]:
-    """Best-effort: figure out which raw input columns the model expects.
-
-    feature_cols_post are the post-encoding feature names. One-hot columns
-    look like ``{original}_{value}``; ordinal-encoded columns keep their
-    original name. We collapse one-hot outputs back to their original.
-    """
-    onehot_sources: list[str] = list(encoders.get("__onehot__", []) or [])
-    ordinal_sources: list[str] = [c for c in encoders.keys() if c != "__onehot__"]
-
-    required: list[str] = []
-    for col in feature_cols_post:
-        owned_by_onehot = any(col.startswith(f"{src}_") for src in onehot_sources)
-        if owned_by_onehot:
-            continue
-        if col in ordinal_sources:
-            required.append(col)
-            continue
-        required.append(col)
-
-    for src in onehot_sources:
-        if src not in required:
-            required.append(src)
-    for src in ordinal_sources:
-        if src not in required:
-            required.append(src)
-
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for col in required:
-        if col not in seen:
-            seen.add(col)
-            deduped.append(col)
-    return deduped
 
 
 def _apply_preprocessing(
@@ -87,6 +49,15 @@ def _apply_preprocessing(
         if col not in df.columns:
             df[col] = 0.0
     df = df[feature_cols_post]
+
+    # Re-apply the same log-transform that training did on skewed features.
+    # Stored in pipeline["log_features"] by _auto_feature_engineer; absent on models
+    # trained before the FE step was added, so the get(..., []) keeps backward compat.
+    log_features = pipeline.get("log_features", []) or []
+    for col in log_features:
+        if col in df.columns:
+            df[col] = np.log1p(df[col])
+
     return df
 
 
@@ -118,7 +89,7 @@ def run_prediction(
     if target_col and target_col in work.columns:
         work = work.drop(columns=[target_col])
 
-    raw_required = _infer_raw_required_columns(feature_cols_post, encoders)
+    raw_required = infer_raw_required_columns(feature_cols_post, encoders)
     missing_required = [c for c in raw_required if c not in work.columns]
     if missing_required:
         return {
