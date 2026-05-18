@@ -19,18 +19,6 @@ import threading
 from contextlib import redirect_stdout
 from typing import Any
 
-# ── Limit joblib / sklearn to single-process so an aborted sandbox thread
-# doesn't leave orphaned child processes pegging CPU on the host. With the
-# daemon-thread "abandon" timeout below, multiprocessing workers can't be
-# cleaned up properly — they keep running, accumulate temp dirs, and on
-# Render they pile up until the worker is killed. Forcing threading +
-# CPU count 1 makes timeouts safe and recoverable. Must be set before
-# sklearn / joblib / loky import anywhere in the process.
-os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
-os.environ.setdefault("JOBLIB_MULTIPROCESSING", "0")
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-
 import numpy as np
 import pandas as pd
 
