@@ -74,7 +74,7 @@ def get_llm(
 
 def get_default_model_id() -> str:
     """Returns the default model ID from environment."""
-    return os.environ.get("OPENAI_MODEL", "gpt-5-mini")
+    return os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
 
 
 def build_lc_history(
