@@ -15,6 +15,7 @@ Two entry points:
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -188,23 +189,130 @@ def _build_column_profiles(df: pd.DataFrame) -> list[FeatureColumnProfile]:
     return profiles
 
 
-ANALYZE_PROMPT = """\
-You are a feature-engineering specialist. The system has already analyzed the dataset and made concrete choices. Write ONE concise paragraph (3-5 sentences) that EXPLAINS why those choices fit the data. Do NOT output JSON or markdown headers — just plain text.
+LLM_CONFIG_PROMPT = """\
+You are a feature-engineering specialist. Read the dataset profile below and decide the best preprocessing strategy for THIS specific data. Use the column names and stats to reason about the domain — different domains need different handling.
 
 DATASET
 {summary}
 
-PROFILES (top 12)
-{profiles}
+COLUMNS ({n_cols} total)
+{column_lines}
 
-DETECTED TASK
-{task} on target candidates: {targets}
+DETECTED TASK CANDIDATES (system heuristic — feel free to disagree)
+{task_candidates}
 
-SYSTEM CHOICES
-{choices}
+HEURISTIC STARTING POINT (override fields you think are wrong)
+{heuristic_json}
 
-In your paragraph, justify each non-trivial pick (null strategy, outlier strategy + threshold, encoding default, scaling, selection method, split) given the dataset characteristics above. If a choice looks counter-intuitive (e.g. selection is off), say why it makes sense here.
+OPTIONS
+- task              : classification | regression | clustering | unsupervised
+- null_default      : drop | mean | median | mode | ffill
+- outlier_strategy  : none | iqr_clip | zscore_remove | winsorize
+- outlier_threshold : number 0.5–5.0 (lower = more aggressive)
+- encoding_default  : label | target | ordinal | frequency | none
+                      (avoid onehot — it explodes column names with _value suffixes)
+- scaling           : none | standard | minmax | robust
+- selection_method  : none | variance | correlation | mutual_info | rfe
+- selection_top_n   : int 1–{n_features}
+- reduction_method  : none | pca
+- reduction_n_components : int 2–20
+- split             : none | train_test
+- test_size         : 0.05–0.5
+
+REASONING GUIDELINES
+- Look at the column SEMANTICS (names, types, cardinality), not just statistics.
+- ID-like columns (customer_id, uuid, user_id, …) should go in drop_columns.
+- Free-form text (avg length > 40 chars, high cardinality) usually drops.
+- Datetime columns suggest time-series → favor median imputation + derived date parts.
+- Names like "label", "target", "y", "outcome", "churn", "default", "class" hint at the supervised target.
+- Highly imbalanced binary targets (rare class < 10%) still get train_test split (stratify happens automatically).
+- For unsupervised / clustering, set target_column = null.
+
+Output ONLY valid JSON. No markdown, no fences, no commentary. Use the EXACT field names below.
+{{
+  "task": "...",
+  "target_column": "..." or null,
+  "drop_columns": ["..."],
+  "null_default": "...",
+  "outlier_strategy": "...",
+  "outlier_threshold": 1.5,
+  "encoding_default": "...",
+  "scaling": "...",
+  "selection_method": "...",
+  "selection_top_n": 10,
+  "reduction_method": "...",
+  "reduction_n_components": 5,
+  "split": "...",
+  "test_size": 0.2,
+  "reasoning": "ONE paragraph (3-5 sentences) explaining your choices in terms of this dataset"
+}}
 """
+
+# Allowed values for each enum-style config field.
+_ALLOWED = {
+    "task": {"classification", "regression", "clustering", "unsupervised"},
+    "null_default": {"drop", "mean", "median", "mode", "ffill", "constant"},
+    "outlier_strategy": {"none", "iqr_clip", "zscore_remove", "winsorize"},
+    "encoding_default": {"label", "target", "ordinal", "frequency", "none", "onehot"},
+    "scaling": {"none", "standard", "minmax", "robust"},
+    "selection_method": {"none", "variance", "correlation", "mutual_info", "rfe"},
+    "reduction_method": {"none", "pca"},
+    "split": {"none", "train_test"},
+}
+
+
+def _parse_llm_config(raw: str, heuristic: dict, valid_cols: set[str]) -> tuple[dict, str] | None:
+    """Parse LLM JSON output, validate every field against allowed enums + column
+    names, fall back to heuristic for invalid fields. Returns (config_dict,
+    reasoning) on success, None on hard parse failure."""
+    text = raw.strip()
+    if "```json" in text:
+        text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in text:
+        text = text.split("```", 1)[1].split("```", 1)[0].strip()
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    merged = dict(heuristic)
+
+    # Enum fields — accept only if value is in allowed set
+    for field, allowed in _ALLOWED.items():
+        val = parsed.get(field)
+        if isinstance(val, str) and val in allowed:
+            merged[field] = val
+
+    # target_column — null OR a real column name
+    if "target_column" in parsed:
+        tc = parsed["target_column"]
+        if tc is None:
+            merged["target_column"] = None
+        elif isinstance(tc, str) and tc in valid_cols:
+            merged["target_column"] = tc
+
+    # drop_columns — only accept actual columns
+    if isinstance(parsed.get("drop_columns"), list):
+        merged["drop_columns"] = [c for c in parsed["drop_columns"] if isinstance(c, str) and c in valid_cols]
+
+    # Numeric ranges
+    def _clamp(field: str, lo: float, hi: float) -> None:
+        val = parsed.get(field)
+        if isinstance(val, (int, float)):
+            merged[field] = max(lo, min(hi, float(val)))
+
+    _clamp("outlier_threshold", 0.5, 5.0)
+    _clamp("test_size", 0.05, 0.5)
+    if isinstance(parsed.get("selection_top_n"), int):
+        merged["selection_top_n"] = max(1, min(parsed["selection_top_n"], len(valid_cols)))
+    if isinstance(parsed.get("reduction_n_components"), int):
+        merged["reduction_n_components"] = max(2, min(parsed["reduction_n_components"], 20))
+
+    reasoning = parsed.get("reasoning") if isinstance(parsed.get("reasoning"), str) else ""
+    return merged, reasoning
 
 
 def analyze(data: list[dict], model_id: str | None = None) -> FeatureSuggestion:
@@ -327,70 +435,100 @@ def analyze(data: list[dict], model_id: str | None = None) -> FeatureSuggestion:
 
     derived = _propose_derived(df, ctx.numeric_cols, ctx.datetime_cols)
 
-    suggested_config = FeatureConfig(
-        task=detected_task,
-        target_column=target,
-        null_default=null_default,
-        outlier_strategy=outlier_strategy,
-        outlier_threshold=outlier_threshold,
-        encoding_default=encoding_default,
-        scaling=scaling,
-        columns=columns_plan,
-        selection_method=selection_method,
-        selection_top_n=selection_top_n,
-        derived=derived,
-        reduction_method=reduction_method,
-        reduction_n_components=reduction_n_components,
-        split=split,
-        test_size=test_size,
-    )
+    # ── Pack heuristic into a dict the LLM can read + override ───────────
+    heuristic = {
+        "task": detected_task,
+        "target_column": target,
+        "drop_columns": [n for n, p in columns_plan.items() if p.drop],
+        "null_default": null_default,
+        "outlier_strategy": outlier_strategy,
+        "outlier_threshold": outlier_threshold,
+        "encoding_default": encoding_default,
+        "scaling": scaling,
+        "selection_method": selection_method,
+        "selection_top_n": selection_top_n,
+        "reduction_method": reduction_method,
+        "reduction_n_components": reduction_n_components,
+        "split": split,
+        "test_size": test_size,
+    }
 
-    # LLM reasoning (optional polish — never blocks the suggestion)
+    # ── Ask the LLM to think about THIS dataset and override anything ────
+    valid_cols = set(df.columns.astype(str))
+    final_cfg: dict = dict(heuristic)
     reasoning = ""
-    choices_lines = [
-        f"  null_default      = {null_default}",
-        f"  outlier_strategy  = {outlier_strategy}  (threshold={outlier_threshold})",
-        f"  encoding_default  = {encoding_default}",
-        f"  scaling           = {scaling}",
-        f"  selection_method  = {selection_method}  (top_n={selection_top_n})",
-        f"  reduction_method  = {reduction_method}"
-        + (f"  (n_components={reduction_n_components})" if reduction_method == "pca" else ""),
-        f"  split             = {split}"
-        + (f"  (test_size={test_size})" if split == "train_test" else ""),
-        f"  derived proposed  = {len(derived)}",
-    ]
     try:
-        llm = get_llm(temperature=0.0, max_tokens=300, model_id=model_id)
+        llm = get_llm(temperature=0.0, max_tokens=700, model_id=model_id)
         summary = (
             f"shape={n_rows}x{n_cols}  duplicates={ctx.duplicate_count}  "
             f"numeric={len(ctx.numeric_cols)}  categorical={len(ctx.categorical_cols)}  "
             f"datetime={len(ctx.datetime_cols)}  skewed={len(ctx.skewed_cols)}  "
             f"outlier_density={outlier_density:.1f}%"
         )
-        profile_lines = [
-            f"  {p.name} ({p.role}, null={p.null_pct}%, unique={p.n_unique})"
-            for p in profiles[:12]
+        column_lines = [
+            f"  {p.name:24s}  role={p.role:11s}  unique={p.n_unique:5d}  "
+            f"null={p.null_pct:5.1f}%  dtype={p.dtype}"
+            for p in profiles[:30]
         ]
-        prompt = ANALYZE_PROMPT.format(
+        if len(profiles) > 30:
+            column_lines.append(f"  … +{len(profiles) - 30} more columns omitted")
+        prompt = LLM_CONFIG_PROMPT.format(
             summary=summary,
-            profiles="\n".join(profile_lines),
-            task=detected_task,
-            targets=", ".join(target_candidates) or "n/a",
-            choices="\n".join(choices_lines),
+            n_cols=n_cols,
+            n_features=max(1, n_cols - 1),
+            column_lines="\n".join(column_lines),
+            task_candidates=", ".join(target_candidates) or "(no clear target — consider unsupervised)",
+            heuristic_json=json.dumps(heuristic, ensure_ascii=False, indent=2),
         )
         resp = llm.invoke([HumanMessage(content=prompt)])
-        reasoning = (resp.content or "").strip()
+        parsed = _parse_llm_config((resp.content or ""), heuristic, valid_cols)
+        if parsed is not None:
+            final_cfg, reasoning = parsed
+            log.info(
+                "Feature analyze LLM accepted — overrides: %s",
+                {k: final_cfg[k] for k in heuristic if final_cfg.get(k) != heuristic.get(k)},
+            )
+        else:
+            log.warning("Feature analyze LLM returned unparseable JSON — using heuristic")
     except Exception as exc:  # pragma: no cover — never fail analyze
-        log.warning("Feature analyze LLM polish failed: %s", exc)
+        log.warning("Feature analyze LLM call failed: %s — using heuristic", exc)
+
+    # Fallback reasoning when the LLM didn't supply one
+    if not reasoning:
         reasoning = (
-            f"{detected_task.title()} task with {n_rows} rows × {n_cols} cols. "
-            f"Null strategy '{null_default}' chosen because "
-            f"{'skew is significant' if skewed_pct > 0.4 else 'numerics outnumber categoricals' if len(ctx.numeric_cols) >= len(ctx.categorical_cols) else 'categoricals dominate'}. "
-            f"Outlier strategy '{outlier_strategy}' "
-            f"({'outlier density ' + f'{outlier_density:.1f}' + '%' if outlier_strategy != 'none' else 'data looks clean'}). "
-            f"Encoding default '{encoding_default}' fits the categorical cardinality mix. "
-            f"Scaling '{scaling}'; selection '{selection_method}'; split '{split}'."
+            f"{final_cfg['task'].title()} task on {n_rows} rows × {n_cols} cols. "
+            f"Null strategy '{final_cfg['null_default']}' "
+            f"({'skew dominates' if skewed_pct > 0.4 else 'numerics dominate' if len(ctx.numeric_cols) >= len(ctx.categorical_cols) else 'categoricals dominate'}); "
+            f"outlier strategy '{final_cfg['outlier_strategy']}' "
+            f"({'density ' + f'{outlier_density:.1f}' + '%' if final_cfg['outlier_strategy'] != 'none' else 'data looks clean'}); "
+            f"encoding '{final_cfg['encoding_default']}' to keep original column names; "
+            f"scaling '{final_cfg['scaling']}'; selection '{final_cfg['selection_method']}'; "
+            f"split '{final_cfg['split']}'."
         )
+
+    # ── Fold LLM drop_columns into per-column plan ──────────────────────
+    for col in final_cfg.get("drop_columns", []):
+        plan = columns_plan.get(col, ColumnPlan())
+        plan.drop = True
+        columns_plan[col] = plan
+
+    suggested_config = FeatureConfig(
+        task=final_cfg["task"],
+        target_column=final_cfg["target_column"],
+        null_default=final_cfg["null_default"],
+        outlier_strategy=final_cfg["outlier_strategy"],
+        outlier_threshold=final_cfg["outlier_threshold"],
+        encoding_default=final_cfg["encoding_default"],
+        scaling=final_cfg["scaling"],
+        columns=columns_plan,
+        selection_method=final_cfg["selection_method"],
+        selection_top_n=final_cfg["selection_top_n"],
+        derived=derived,
+        reduction_method=final_cfg["reduction_method"],
+        reduction_n_components=final_cfg["reduction_n_components"],
+        split=final_cfg["split"],
+        test_size=final_cfg["test_size"],
+    )
 
     return FeatureSuggestion(
         config=suggested_config,
@@ -398,7 +536,7 @@ def analyze(data: list[dict], model_id: str | None = None) -> FeatureSuggestion:
         column_profiles=profiles,
         derived_candidates=derived,
         suggested_targets=target_candidates,
-        detected_task=detected_task,
+        detected_task=final_cfg["task"],
     )
 
 
