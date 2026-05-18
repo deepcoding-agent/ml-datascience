@@ -48,16 +48,17 @@ def _style(fig: go.Figure, **kw) -> go.Figure:
 # ── AI prompt ────────────────────────────────────────────────────────────────
 
 DOCUMENT_PROMPT = """\
-You are a business intelligence consultant presenting findings to a CEO.
-Your job: turn raw data analysis into ACTIONABLE BUSINESS INTELLIGENCE.
+You are a senior data scientist writing a technical EDA report for a fellow
+analyst. The audience knows statistics. Your job is to characterize the data
+deeply — distributions, relationships, quality, modeling potential — NOT to
+give business advice (a separate /biz-report covers that).
 
 ## Dataset Analysis
 {analysis}
 
 ## Instructions
-Write a JSON report that a non-technical executive can read and immediately act on.
-Focus on: revenue impact, cost savings, customer insights, market opportunities, and risk areas.
-Use actual numbers from the analysis. Every insight must suggest a concrete action.
+Write a JSON EDA report. Every claim must cite specific column names, numbers,
+or percentages from the analysis above. Be precise and technical.
 
 IMPORTANT: Respond in the same language as the column names suggest.
 If columns look Thai (ราคา, ชื่อ, etc.) → write in Thai.
@@ -66,49 +67,33 @@ Mixed → write in the dominant language.
 
 Return EXACTLY this JSON (no markdown fences):
 {{
-  "title": "Business Intelligence Report: <dataset name>",
-  "executive_summary": "5-6 sentences: What is this data? What are the 3 most important findings? What is the #1 action item? Frame everything in business value (revenue, cost, customers, growth).",
-  "data_overview": "2-3 sentences: What kind of business data is this? How many records? What business dimensions does it cover?",
-  "quality_assessment": "3-4 sentences: Is this data trustworthy for decision-making? What data gaps could lead to wrong decisions? Rate: Ready/Needs Cleaning/Unreliable.",
-  "distribution_analysis": "4-5 sentences: What do the numbers tell us about the business? Are there concentrations (e.g., 80% of revenue from 20% of products)? Price ranges? Volume patterns? Translate every stat into a business implication.",
-  "correlation_analysis": "4-5 sentences: What drives what? If X goes up, does Y go up? Which factors most influence the key business metrics? What levers can the business pull?",
-  "missing_value_analysis": "2-3 sentences: Are there data collection gaps? Could missing data cause blind spots in decision-making?",
-  "categorical_analysis": "3-4 sentences: What segments exist? Which segments are largest/most profitable? Are there underserved segments with growth potential?",
-  "outlier_analysis": "3-4 sentences: Are outliers premium opportunities (VIP customers, luxury products) or problems (errors, fraud)? What special handling do they need?",
-  "business_insights": "6-8 sentences: The KEY section. Write like a consultant briefing the CEO. What story does the data tell? What are the top 3 strategic insights? What competitive advantages can be derived? What risks should leadership be aware of?",
-  "use_cases": [
-    {{"title": "specific use case", "description": "2-3 sentences: exactly how to use this data to generate revenue, reduce cost, or improve operations. Include which columns and what analysis.", "category": "marketing|sales|operations|product|finance|research"}},
-    {{"title": "...", "description": "...", "category": "..."}}
-  ],
-  "market_analysis": "4-5 sentences: What does the data reveal about the market? Customer segments? Price sensitivity? Demand patterns? Competitive positioning? Geographic or demographic trends?",
-  "promotion_strategies": [
-    "Strategy 1: Reference specific segments/values from the data. e.g., 'Target the 95 properties with 4+ bedrooms (17% of inventory) with premium staging services — they average 45% higher prices'",
-    "Strategy 2: Another data-driven strategy with specific numbers",
-    "Strategy 3: ..."
-  ],
+  "title": "EDA Report: <dataset name>",
+  "executive_summary": "4-5 sentences: shape, dominant data types, the 2-3 most important statistical findings, and the headline ML readiness verdict. Pure data characterization, no business framing.",
+  "data_overview": "3-4 sentences: row/column counts, memory footprint, dtype mix (numeric/categorical/datetime), and what each major column likely represents based on its name and stats.",
+  "quality_assessment": "4-5 sentences: completeness %, duplicate %, constant columns, high-null columns. Classify each as MCAR/MAR/MNAR if hints exist. Concrete: should we drop, impute, or flag each problem column?",
+  "distribution_analysis": "5-7 sentences: For each notable numeric, classify its shape (normal/right-skew/left-skew/bimodal/uniform/heavy-tail). Cite skew values. Flag log-transform candidates explicitly. Mention scale heterogeneity if numeric ranges differ by orders of magnitude.",
+  "correlation_analysis": "5-7 sentences: Top 3-5 correlated pairs by name + value. Explicitly call out |r|>0.9 multicollinearity (which feature in each pair to drop). Note if a likely target shows strong signal correlations with features. Spurious correlation warnings if any (e.g. ID-like columns).",
+  "missing_value_analysis": "3-4 sentences: column-by-column null % for problem columns. Pattern detection: are nulls concentrated in specific rows or random? Which columns are imputable vs which should be dropped.",
+  "categorical_analysis": "4-5 sentences: cardinality per categorical. Flag dominant-value imbalance (>80% one value). Flag high-cardinality (>50 unique → don't one-hot). Suggest encoding strategy per column (one-hot, ordinal, target, frequency).",
+  "outlier_analysis": "4-5 sentences: Columns with most IQR outliers by % and count. Distinguish true outliers (heavy tails) from data errors. Suggest treatment per column: clip/winsorize/keep-as-feature/log-transform.",
+  "ml_readiness": "5-7 sentences: ML readiness score with breakdown of each factor (sample size, feature-to-sample ratio, completeness, scale heterogeneity, multicollinearity). List the top probable target columns with task type. State which ML approaches are immediately viable vs which need more preprocessing.",
+  "analytical_directions": "5-7 sentences: What analyses can this dataset support? Be specific — list 4-6 concrete analyses by name (e.g. 'churn classification using churn as target with logistic regression as baseline', 'cohort analysis on hire_date', 'price-feature regression with log-transformed price'). For each, name the columns and method.",
   "recommendations": [
-    "Priority 1 (Quick Win): Something achievable in 1-2 weeks with clear ROI",
-    "Priority 2 (Short-term): 1-3 month initiative",
-    "Priority 3 (Strategic): Longer-term data infrastructure or capability",
-    "Priority 4: ...",
-    "Priority 5: ..."
+    "Data-prep step 1 — specific cleaning/encoding action with column names",
+    "Data-prep step 2 — feature engineering with rationale",
+    "Modeling experiment 1 — algorithm, target, expected metric range",
+    "Modeling experiment 2 — ...",
+    "Further data to collect (if obvious gaps exist)"
   ],
-  "next_steps": [
-    "Immediate: What analysis should be done next to validate these findings",
-    "Data gap: What additional data would unlock more value",
-    "ML opportunity: What prediction or classification could automate decisions"
-  ],
-  "conclusion": "3-4 sentences: Bottom line for the CEO. What is the strategic value of this data? What decision should be made today?"
+  "conclusion": "3-4 sentences: technical bottom line. Is this dataset analysis-ready or modeling-ready? What's the highest-value analysis to run first, and why?"
 }}
 
 Rules:
-- Use ACTUAL column names, numbers, and percentages from the analysis
-- Frame everything as business impact: revenue, cost, customers, growth, risk
-- Every recommendation must be actionable — who does what by when
-- use_cases: 4-6 realistic use cases with ROI potential
-- promotion_strategies: 3-5 strategies with SPECIFIC numbers from the data
-- Think like McKinsey presenting to a Fortune 500 CEO
-- NO vague platitudes — every sentence must reference specific data
+- Cite ACTUAL column names, numbers, percentages from the analysis
+- Use statistical vocabulary (skewness, kurtosis, IQR, multicollinearity, MCAR/MAR, stratification)
+- NO business framing (no revenue, ROI, customer segments, marketing) — /biz-report handles that
+- Every sentence must say something concrete about THIS dataset, not generic EDA advice
+- If a section truly has nothing notable to report, write a single sentence saying so
 """
 
 
@@ -345,6 +330,17 @@ def run_document(
         "warnings": ctx.warnings,
     }
 
+    # ── Deep EDA: target detection, balance, ML readiness, datetime, cardinality ──
+    # These are surfaced to the LLM narrator so each section can speak to them.
+    # Build profiles once here; the same list is reused for column_profiles below.
+    column_profiles = _build_column_profiles(df)
+    analysis["target_candidates"]      = _detect_target_candidates(df, column_profiles)
+    analysis["categorical_balance"]    = _categorical_balance(df, ctx.categorical_cols)
+    analysis["high_cardinality_cats"]  = _high_cardinality_cats(df, ctx.categorical_cols)
+    analysis["datetime_summary"]       = _datetime_summary(df, ctx.datetime_cols)
+    analysis["multicollinear_pairs"]   = [c for c in top_corr if abs(c["value"]) > 0.9]
+    analysis["ml_readiness"]           = _ml_readiness(df, analysis, ctx.numeric_cols)
+
     # ── 2. Generate charts ───────────────────────────────────────────
     charts = {}
     charts["distribution"] = _chart_distribution(df, ctx.numeric_cols)
@@ -356,8 +352,7 @@ def run_document(
     # Remove None entries
     charts = {k: v for k, v in charts.items() if v is not None}
 
-    # ── 3. Column profiles ───────────────────────────────────────────
-    column_profiles = _build_column_profiles(df)
+    # ── 3. Column profiles already built above for target detection ──────
 
     # ── 4. AI narrative ──────────────────────────────────────────────
     analysis_text = _format_for_llm(df, analysis, column_profiles)
@@ -388,6 +383,193 @@ def run_document(
         "analysis": analysis,
         "duration_seconds": elapsed,
     }
+
+
+def _detect_target_candidates(df: pd.DataFrame, profiles: list[dict]) -> list[dict]:
+    """Heuristically pick likely target columns + suggest task type.
+
+    Three signals — last column position, name keywords, class-balance shape.
+    Score is informal (0-100); the LLM uses it to suggest modeling directions.
+    """
+    candidates: list[dict] = []
+    target_keywords = ("target", "label", "class", "y", "outcome", "price", "churn",
+                       "fraud", "default", "rating", "score")
+    last_col = df.columns[-1] if len(df.columns) else None
+
+    for p in profiles:
+        col = p["name"]
+        score = 0
+        reasons: list[str] = []
+
+        if col == last_col:
+            score += 30
+            reasons.append("last column")
+        if any(kw in col.lower() for kw in target_keywords):
+            score += 40
+            reasons.append("name suggests target")
+
+        # Task type inference
+        task_type = "regression"
+        if p.get("type") == "numeric":
+            uniq = p.get("unique", 0)
+            if uniq <= 10:
+                task_type = "classification"
+                score += 15
+                reasons.append(f"{uniq} discrete values")
+            else:
+                score += 10
+                reasons.append("continuous numeric")
+        else:
+            uniq = p.get("unique", 0)
+            if 2 <= uniq <= 20:
+                task_type = "classification"
+                score += 25
+                reasons.append(f"{uniq} categories")
+            else:
+                # Free-text or high-cardinality categorical → probably not target
+                continue
+
+        if score > 0:
+            candidates.append({
+                "column": col,
+                "score": score,
+                "task_type": task_type,
+                "reason": "; ".join(reasons),
+            })
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:5]
+
+
+def _categorical_balance(df: pd.DataFrame, cat_cols: list[str]) -> list[dict]:
+    """Flag categoricals whose dominant value covers > 80% — bad for classification."""
+    results: list[dict] = []
+    for col in cat_cols[:20]:
+        try:
+            counts = df[col].value_counts(dropna=False)
+            if counts.empty:
+                continue
+            n_classes = len(counts)
+            dominant_val = str(counts.index[0])
+            dominant_pct = round(float(counts.iloc[0]) / max(len(df), 1) * 100, 1)
+            results.append({
+                "column": col,
+                "n_classes": int(n_classes),
+                "dominant_value": dominant_val[:50],
+                "dominant_pct": dominant_pct,
+                "imbalanced": dominant_pct > 80,
+            })
+        except Exception:
+            continue
+    return results
+
+
+def _ml_readiness(df: pd.DataFrame, analysis: dict, num_cols: list[str]) -> dict:
+    """Score how ready the dataset is for ML modeling (0-100) with breakdown."""
+    factors: list[dict] = []
+    score = 100
+
+    rows, cols = df.shape
+
+    # 1. Sample size adequacy
+    if rows < 50:
+        penalty, status = 40, "too small for modeling"
+    elif rows < 500:
+        penalty, status = 15, "small — use cross-validation aggressively"
+    elif rows < 5000:
+        penalty, status = 0, "adequate"
+    else:
+        penalty, status = 0, "good"
+    score -= penalty
+    factors.append({"factor": "sample_size", "value": rows, "penalty": penalty, "status": status})
+
+    # 2. Feature/sample ratio (curse of dimensionality risk)
+    ratio = cols / max(rows, 1)
+    if ratio > 0.5:
+        penalty, status = 25, f"{cols}/{rows} features-to-rows → overfitting risk"
+    elif ratio > 0.1:
+        penalty, status = 10, "moderate dimensionality"
+    else:
+        penalty, status = 0, "healthy"
+    score -= penalty
+    factors.append({"factor": "feature_ratio", "value": round(ratio, 3), "penalty": penalty, "status": status})
+
+    # 3. Completeness
+    completeness = analysis["overview"]["completeness_pct"]
+    if completeness < 70:
+        penalty, status = 25, "many missing values"
+    elif completeness < 90:
+        penalty, status = 10, "moderate missingness"
+    else:
+        penalty, status = 0, "clean"
+    score -= penalty
+    factors.append({"factor": "completeness", "value": completeness, "penalty": penalty, "status": status})
+
+    # 4. Scale heterogeneity — flag if numeric features span > 6 orders of magnitude
+    if len(num_cols) >= 2:
+        try:
+            ranges = [float(df[c].max() - df[c].min()) for c in num_cols
+                      if df[c].notna().any() and df[c].max() != df[c].min()]
+            if ranges:
+                ratio = max(ranges) / max(min(ranges), 1e-9)
+                if ratio > 1e6:
+                    penalty, status = 5, "wide scale range — scaling required"
+                else:
+                    penalty, status = 0, "comparable scales"
+                score -= penalty
+                factors.append({"factor": "scale_heterogeneity", "value": f"{ratio:.0e}", "penalty": penalty, "status": status})
+        except Exception:
+            pass
+
+    # 5. Multicollinearity
+    multi_pairs = [c for c in analysis.get("correlations", []) if abs(c["value"]) > 0.9]
+    if multi_pairs:
+        penalty, status = min(15, len(multi_pairs) * 3), f"{len(multi_pairs)} pairs with |r|>0.9"
+        score -= penalty
+        factors.append({"factor": "multicollinearity", "value": len(multi_pairs), "penalty": penalty, "status": status})
+
+    score = max(0, score)
+    label = "Ready" if score >= 80 else "Mostly ready" if score >= 60 else "Needs work" if score >= 40 else "Not ready"
+    return {"score": score, "label": label, "factors": factors}
+
+
+def _datetime_summary(df: pd.DataFrame, dt_cols: list[str]) -> list[dict]:
+    """Range + frequency analysis for datetime columns — flags potential time series."""
+    results: list[dict] = []
+    for col in dt_cols[:5]:
+        try:
+            s = pd.to_datetime(df[col], errors="coerce").dropna()
+            if s.empty:
+                continue
+            results.append({
+                "column": col,
+                "min": str(s.min()),
+                "max": str(s.max()),
+                "range_days": int((s.max() - s.min()).days),
+                "n_unique": int(s.nunique()),
+                "looks_like_timeseries": s.nunique() == len(s),
+            })
+        except Exception:
+            continue
+    return results
+
+
+def _high_cardinality_cats(df: pd.DataFrame, cat_cols: list[str]) -> list[dict]:
+    """Flag categoricals with > 50 unique values — one-hot would explode."""
+    results: list[dict] = []
+    for col in cat_cols[:20]:
+        try:
+            uniq = int(df[col].nunique())
+            if uniq > 50:
+                results.append({
+                    "column": col,
+                    "unique": uniq,
+                    "pct_of_rows": round(uniq / max(len(df), 1) * 100, 1),
+                })
+        except Exception:
+            continue
+    results.sort(key=lambda x: x["unique"], reverse=True)
+    return results
 
 
 def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> str:
@@ -432,6 +614,41 @@ def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> s
         lines.append("\nOutliers (IQR):")
         for o in analysis["outlier_summary"][:8]:
             lines.append(f"  {o['column']}: {o['count']} ({o['pct']}%)")
+
+    # Deep EDA blocks for the LLM narrator
+    if analysis.get("target_candidates"):
+        lines.append("\nProbable target columns (use these to frame ML direction):")
+        for t in analysis["target_candidates"][:3]:
+            lines.append(f"  {t['column']} → {t['task_type']} (score={t['score']}, {t['reason']})")
+
+    if analysis.get("multicollinear_pairs"):
+        lines.append("\nMulticollinearity (|r|>0.9, drop one of each pair before linear models):")
+        for c in analysis["multicollinear_pairs"][:8]:
+            lines.append(f"  {c['col1']} ↔ {c['col2']}: {c['value']}")
+
+    if analysis.get("categorical_balance"):
+        imbalanced = [c for c in analysis["categorical_balance"] if c["imbalanced"]]
+        if imbalanced:
+            lines.append("\nImbalanced categoricals (dominant value > 80%):")
+            for c in imbalanced[:5]:
+                lines.append(f"  {c['column']}: '{c['dominant_value']}' = {c['dominant_pct']}% ({c['n_classes']} classes)")
+
+    if analysis.get("high_cardinality_cats"):
+        lines.append("\nHigh-cardinality categoricals (>50 unique — one-hot would explode):")
+        for c in analysis["high_cardinality_cats"][:5]:
+            lines.append(f"  {c['column']}: {c['unique']} unique values")
+
+    if analysis.get("datetime_summary"):
+        lines.append("\nDatetime columns:")
+        for d in analysis["datetime_summary"]:
+            ts = " (time-series candidate)" if d["looks_like_timeseries"] else ""
+            lines.append(f"  {d['column']}: {d['min']} → {d['max']} ({d['range_days']} days{ts})")
+
+    if analysis.get("ml_readiness"):
+        mr = analysis["ml_readiness"]
+        lines.append(f"\nML Readiness: {mr['score']}/100 — {mr['label']}")
+        for f in mr["factors"]:
+            lines.append(f"  - {f['factor']}: {f['status']} ({f['value']})")
 
     return "\n".join(lines)
 

@@ -1,4 +1,4 @@
-"""POST /documents — comprehensive EDA document report."""
+"""POST /eda — comprehensive EDA document report (charts + per-section narrative)."""
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -11,13 +11,13 @@ router = APIRouter()
 log = get_logger(__name__)
 
 
-class DocumentRequest(BaseModel):
+class EDADocumentRequest(BaseModel):
     dataset_name: str
     data: list[dict]
     model_id: str | None = None
 
 
-class DocumentResponse(BaseModel):
+class EDADocumentResponse(BaseModel):
     success: bool
     dataset_name: str = ""
     document: dict = {}
@@ -27,9 +27,9 @@ class DocumentResponse(BaseModel):
     error: str = ""
 
 
-@router.post("/documents", response_model=DocumentResponse)
-async def documents(req: DocumentRequest) -> DocumentResponse:
-    log.info(">>> /documents  dataset='%s'  rows=%d", req.dataset_name, len(req.data))
+@router.post("/eda", response_model=EDADocumentResponse)
+async def eda(req: EDADocumentRequest) -> EDADocumentResponse:
+    log.info(">>> /eda  dataset='%s'  rows=%d", req.dataset_name, len(req.data))
     try:
         result = run_document(
             data=req.data,
@@ -37,11 +37,11 @@ async def documents(req: DocumentRequest) -> DocumentResponse:
             model_id=req.model_id,
         )
         log.info(
-            "<<< /documents done  quality=%s  %.1fs",
+            "<<< /eda done  quality=%s  %.1fs",
             result["document"].get("quality_score"),
             result["duration_seconds"],
         )
-        return DocumentResponse(**result)
+        return EDADocumentResponse(**result)
     except Exception as exc:
-        log.exception("/documents error: %s", exc)
-        return DocumentResponse(success=False, error=str(exc))
+        log.exception("/eda error: %s", exc)
+        return EDADocumentResponse(success=False, error=str(exc))
