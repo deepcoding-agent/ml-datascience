@@ -74,13 +74,20 @@ def _column_role(series: pd.Series) -> str:
 
 
 def _suggest_encoding(series: pd.Series) -> str | None:
+    """Default-encoding heuristic that PRESERVES original column names:
+    binary → label (0/1), low/mid cardinality → ordinal, high cardinality →
+    frequency. Onehot is intentionally never the default — it produces
+    column_value-suffix columns (mainroad_yes, mainroad_no) which most
+    downstream tasks find harder to read than 0/1 in the original column.
+    Users can still pick onehot per-column in the panel if they want it.
+    """
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return None
     n_unique = int(series.nunique())
     if n_unique <= 1:
         return None
-    if n_unique <= 10:
-        return "onehot"
+    if n_unique == 2:
+        return "label"
     if n_unique <= 50:
         return "ordinal"
     return "frequency"
