@@ -189,7 +189,7 @@ def _build_column_profiles(df: pd.DataFrame) -> list[FeatureColumnProfile]:
 
 
 ANALYZE_PROMPT = """\
-You are a feature-engineering specialist. Given the dataset summary below, write ONE concise paragraph (3-5 sentences) explaining the recommended preprocessing strategy. Do NOT output JSON or markdown headers — just plain text.
+You are a feature-engineering specialist. The system has already analyzed the dataset and made concrete choices. Write ONE concise paragraph (3-5 sentences) that EXPLAINS why those choices fit the data. Do NOT output JSON or markdown headers — just plain text.
 
 DATASET
 {summary}
@@ -200,64 +200,172 @@ PROFILES (top 12)
 DETECTED TASK
 {task} on target candidates: {targets}
 
-Explain: (a) which task you'd pick, (b) what null/outlier strategy is suitable, (c) any columns to drop, (d) whether scaling and feature selection are useful here.
+SYSTEM CHOICES
+{choices}
+
+In your paragraph, justify each non-trivial pick (null strategy, outlier strategy + threshold, encoding default, scaling, selection method, split) given the dataset characteristics above. If a choice looks counter-intuitive (e.g. selection is off), say why it makes sense here.
 """
 
 
 def analyze(data: list[dict], model_id: str | None = None) -> FeatureSuggestion:
+    """Build a fully data-driven FeatureConfig — every field is derived from
+    dataset characteristics, not a placeholder default. The user can still
+    override anything in the panel; "auto" is intentionally avoided so they
+    see what the system actually chose.
+    """
     df = pd.DataFrame(data)
     ctx = analyze_context(df)
     profiles = _build_column_profiles(df)
     detected_task, target_candidates = _detect_task_and_targets(df)
 
-    # Build a default FeatureConfig from heuristics
+    n_rows, n_cols = df.shape
     target = target_candidates[0] if target_candidates else None
+
+    # ── Per-column plan (drop / null strategy / encoding) ────────────────
     columns_plan: dict[str, ColumnPlan] = {}
     for p in profiles:
         if p.n_unique <= 1 or p.role == "text" or p.null_pct > 80:
             columns_plan[p.name] = ColumnPlan(drop=True)
             continue
         plan = ColumnPlan()
-        if p.role == "categorical":
+        if p.role == "categorical" and p.suggested_encoding:
             plan.encoding = p.suggested_encoding
         if p.null_pct > 0:
             plan.null_strategy = p.suggested_null_strategy
         if plan != ColumnPlan():
             columns_plan[p.name] = plan
 
-    # Outlier strategy: only suggest IQR clip if a meaningful fraction of numeric cols are skewed
-    outlier_strategy = "iqr_clip" if len(ctx.skewed_cols) >= 2 else "none"
+    # ── Null default: concrete pick based on dataset shape ───────────────
+    skewed_pct = len(ctx.skewed_cols) / max(1, len(ctx.numeric_cols))
+    if skewed_pct > 0.4:
+        null_default = "median"          # robust to skew
+    elif len(ctx.numeric_cols) >= len(ctx.categorical_cols):
+        null_default = "mean"            # mostly numeric
+    else:
+        null_default = "mode"            # mostly categorical
 
-    # Scaling: standard by default; robust if many skewed cols
-    scaling = "robust" if len(ctx.skewed_cols) >= 3 else "standard"
+    # ── Encoding default: vote across categorical columns ────────────────
+    cat_cards = [int(df[c].nunique(dropna=True)) for c in ctx.categorical_cols]
+    binary_n  = sum(1 for k in cat_cards if k == 2)
+    mid_n     = sum(1 for k in cat_cards if 2 < k <= 50)
+    high_n    = sum(1 for k in cat_cards if k > 50)
+    if cat_cards and binary_n >= max(mid_n, high_n):
+        encoding_default = "label"
+    elif cat_cards and mid_n >= high_n:
+        encoding_default = "ordinal"
+    elif cat_cards:
+        encoding_default = "frequency"
+    else:
+        encoding_default = "ordinal"     # no categoricals — irrelevant; pick a safe value
 
-    # Feature selection: enable when many features
-    selection_method = "mutual_info" if df.shape[1] > 15 else "none"
-    selection_top_n = min(20, max(5, df.shape[1] - 1))
+    # ── Outlier handling: strategy + adaptive threshold ──────────────────
+    outlier_density = 0.0
+    sample_cols = [c for c in ctx.numeric_cols if c != target][:12]
+    if sample_cols:
+        counts = []
+        for col in sample_cols:
+            s = df[col].dropna()
+            if len(s) < 4:
+                continue
+            q1, q3 = s.quantile(0.25), s.quantile(0.75)
+            iqr = q3 - q1
+            if iqr <= 0:
+                continue
+            n_out = int(((s < q1 - 1.5 * iqr) | (s > q3 + 1.5 * iqr)).sum())
+            counts.append(n_out / len(s))
+        if counts:
+            outlier_density = float(np.mean(counts)) * 100
+
+    if n_rows < 200:
+        outlier_strategy = "none"        # too few rows to safely trim
+        outlier_threshold = 1.5
+    elif outlier_density > 10:
+        outlier_strategy = "iqr_clip"
+        outlier_threshold = 1.2          # aggressive when many outliers
+    elif outlier_density > 3 or len(ctx.skewed_cols) >= 2:
+        outlier_strategy = "iqr_clip"
+        outlier_threshold = 1.5
+    else:
+        outlier_strategy = "none"        # clean data — don't disturb
+        outlier_threshold = 2.0
+
+    # ── Scaling: data-driven ─────────────────────────────────────────────
+    if skewed_pct > 0.3:
+        scaling = "robust"               # heavy skew/outliers
+    elif n_cols > 30:
+        scaling = "minmax"               # high-dim → bound the range
+    else:
+        scaling = "standard"
+
+    # ── Feature selection: only if there's a target and enough features ──
+    eligible_features = max(1, n_cols - (1 if target else 0))
+    if not target or eligible_features <= 8:
+        selection_method = "none"
+        selection_top_n = max(5, eligible_features)
+    elif eligible_features > 30:
+        selection_method = "rfe"
+        selection_top_n = min(20, eligible_features // 2)
+    else:
+        selection_method = "mutual_info"
+        selection_top_n = min(20, max(5, eligible_features - 1))
+
+    # ── Dimensionality reduction: PCA only for very high-dim datasets ────
+    if eligible_features > 40:
+        reduction_method = "pca"
+        reduction_n_components = min(15, eligible_features // 4)
+    else:
+        reduction_method = "none"
+        reduction_n_components = 5
+
+    # ── Output split: train/test by default for supervised + non-tiny ────
+    if detected_task in ("classification", "regression") and n_rows >= 100 and target:
+        split = "train_test"
+        test_size = 0.15 if n_rows < 500 else 0.2
+    else:
+        split = "none"
+        test_size = 0.2
 
     derived = _propose_derived(df, ctx.numeric_cols, ctx.datetime_cols)
 
     suggested_config = FeatureConfig(
         task=detected_task,
         target_column=target,
-        null_default="auto",
+        null_default=null_default,
         outlier_strategy=outlier_strategy,
+        outlier_threshold=outlier_threshold,
+        encoding_default=encoding_default,
         scaling=scaling,
-        encoding_default="auto",
         columns=columns_plan,
         selection_method=selection_method,
         selection_top_n=selection_top_n,
         derived=derived,
+        reduction_method=reduction_method,
+        reduction_n_components=reduction_n_components,
+        split=split,
+        test_size=test_size,
     )
 
     # LLM reasoning (optional polish — never blocks the suggestion)
     reasoning = ""
+    choices_lines = [
+        f"  null_default      = {null_default}",
+        f"  outlier_strategy  = {outlier_strategy}  (threshold={outlier_threshold})",
+        f"  encoding_default  = {encoding_default}",
+        f"  scaling           = {scaling}",
+        f"  selection_method  = {selection_method}  (top_n={selection_top_n})",
+        f"  reduction_method  = {reduction_method}"
+        + (f"  (n_components={reduction_n_components})" if reduction_method == "pca" else ""),
+        f"  split             = {split}"
+        + (f"  (test_size={test_size})" if split == "train_test" else ""),
+        f"  derived proposed  = {len(derived)}",
+    ]
     try:
         llm = get_llm(temperature=0.0, max_tokens=300, model_id=model_id)
         summary = (
-            f"shape={df.shape[0]}x{df.shape[1]}  duplicates={ctx.duplicate_count}  "
+            f"shape={n_rows}x{n_cols}  duplicates={ctx.duplicate_count}  "
             f"numeric={len(ctx.numeric_cols)}  categorical={len(ctx.categorical_cols)}  "
-            f"datetime={len(ctx.datetime_cols)}  skewed={len(ctx.skewed_cols)}"
+            f"datetime={len(ctx.datetime_cols)}  skewed={len(ctx.skewed_cols)}  "
+            f"outlier_density={outlier_density:.1f}%"
         )
         profile_lines = [
             f"  {p.name} ({p.role}, null={p.null_pct}%, unique={p.n_unique})"
@@ -268,15 +376,20 @@ def analyze(data: list[dict], model_id: str | None = None) -> FeatureSuggestion:
             profiles="\n".join(profile_lines),
             task=detected_task,
             targets=", ".join(target_candidates) or "n/a",
+            choices="\n".join(choices_lines),
         )
         resp = llm.invoke([HumanMessage(content=prompt)])
         reasoning = (resp.content or "").strip()
     except Exception as exc:  # pragma: no cover — never fail analyze
         log.warning("Feature analyze LLM polish failed: %s", exc)
         reasoning = (
-            f"Detected {detected_task} task. {len(ctx.high_null_cols)} high-null columns "
-            f"flagged for drop. {scaling.title()} scaling chosen. "
-            f"Feature selection: {selection_method}."
+            f"{detected_task.title()} task with {n_rows} rows × {n_cols} cols. "
+            f"Null strategy '{null_default}' chosen because "
+            f"{'skew is significant' if skewed_pct > 0.4 else 'numerics outnumber categoricals' if len(ctx.numeric_cols) >= len(ctx.categorical_cols) else 'categoricals dominate'}. "
+            f"Outlier strategy '{outlier_strategy}' "
+            f"({'outlier density ' + f'{outlier_density:.1f}' + '%' if outlier_strategy != 'none' else 'data looks clean'}). "
+            f"Encoding default '{encoding_default}' fits the categorical cardinality mix. "
+            f"Scaling '{scaling}'; selection '{selection_method}'; split '{split}'."
         )
 
     return FeatureSuggestion(
