@@ -279,3 +279,28 @@ class FeatureResponse(BaseModel):
     test_rows: list[dict] = []
     report: FeatureReportArtifact = FeatureReportArtifact()
     error: str = ""
+
+
+# ── /train/analyze — AI-suggested training setup ─────────────────────────────
+
+class TrainAnalyzeRequest(BaseModel):
+    dataset_name: str
+    data: list[dict]
+    model_id: str | None = None
+
+
+class TrainSuggestion(BaseModel):
+    target_column: str | None = None
+    task_type: str = "auto"             # auto|classification|regression|clustering
+    scoring_metric: str = "auto"        # auto|accuracy|f1|auc|precision|recall|r2|rmse|mae|silhouette
+    cv_folds: int = 5
+    tun_trials: int = 50
+    test_size: float = 0.2
+    reasoning: str = ""
+    suggested_targets: list[str] = []
+
+
+class TrainAnalyzeResponse(BaseModel):
+    success: bool = True
+    suggestion: TrainSuggestion | None = None
+    error: str = ""

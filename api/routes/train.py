@@ -28,10 +28,36 @@ from api.agents.model_storage import (
     set_library_flag,
 )
 from api.agents.train_agent import run_training
+from api.agents.train_setup_agent import analyze_train
 from api.logger import get_logger
+from api.models import TrainAnalyzeRequest, TrainAnalyzeResponse
 
 router = APIRouter()
 log = get_logger(__name__)
+
+
+# ── POST /train/analyze — AI-suggested training setup ──────────────────────
+
+@router.post("/train/analyze", response_model=TrainAnalyzeResponse)
+async def train_analyze(req: TrainAnalyzeRequest) -> TrainAnalyzeResponse:
+    log.info(">>> /train/analyze dataset='%s' rows=%d", req.dataset_name, len(req.data))
+    if not req.data:
+        return TrainAnalyzeResponse(success=False, error="dataset is empty")
+    try:
+        suggestion = analyze_train(req.data, model_id=req.model_id)
+        log.info(
+            "<<< /train/analyze ok target=%s task=%s scoring=%s cv=%d trials=%d test=%.2f",
+            suggestion.target_column,
+            suggestion.task_type,
+            suggestion.scoring_metric,
+            suggestion.cv_folds,
+            suggestion.tun_trials,
+            suggestion.test_size,
+        )
+        return TrainAnalyzeResponse(success=True, suggestion=suggestion)
+    except Exception as exc:
+        log.exception("/train/analyze error: %s", exc)
+        return TrainAnalyzeResponse(success=False, error=str(exc))
 
 # Tight limit on /train — Optuna tuning is expensive (CPU + LLM narrative).
 limiter = Limiter(key_func=get_remote_address)
