@@ -153,23 +153,6 @@ def run_datascience_agent(
             "on the order of earlier steps."
         )
         df_ctx = df_ctx + "\n" + "\n".join(lines)
-
-    # Step 4a: Persistent session memory — distill durable facts (target column,
-    # active dataset, last model, user preferences) from the FULL history, not
-    # just the last 6 turns the planner sees verbatim. Cheap memory model.
-    from api.agents.conversation_memory import (
-        extract_session_facts,
-        format_facts_for_prompt,
-    )
-    memory_llm = get_llm(temperature=0.0, max_tokens=300, model_id=model_id)
-    session_facts = extract_session_facts(history, memory_llm)
-    if session_facts:
-        log.info("  session memory: %s", list(session_facts.keys()))
-        df_ctx = (
-            df_ctx
-            + "\n\n## SESSION MEMORY (durable facts across the whole chat)\n"
-            + format_facts_for_prompt(session_facts)
-        )
     planner_llm = get_llm(temperature=0.0, max_tokens=2048, model_id=model_id)
     plan = plan_steps(
         user_message=message,
@@ -209,57 +192,28 @@ def run_datascience_agent(
         history=history,
     )
 
-    # Step 6b: Critic-retry loop — run critique → if fix_needed → codegen
-    # fix → re-critique. Up to MAX_CRITIQUE_ITERATIONS rounds, stopping on
-    # verdict=ok. Each subsequent fix task carries forward the previous
-    # critique reasons as "PRIOR ATTEMPTS" feedback so the codegen doesn't
-    # repeat earlier mistakes.
-    MAX_CRITIQUE_ITERATIONS = 3
+    # Step 6b: Critique pass — does the produced result actually answer the
+    # question? If not, run ONE codegen step to fix it before responding.
     critique_llm = get_llm(temperature=0.0, max_tokens=400, model_id=model_id)
-    prior_reasons: list[str] = []
+    critique = critique_result(
+        user_message=message,
+        plan=plan,
+        exec_result=exec_result,
+        df_context=df_ctx,
+        llm=critique_llm,
+        history=history,
+    )
+    log.info("  critique: verdict=%s reason=%s",
+             critique.get("verdict"), (critique.get("reason") or "")[:80])
 
-    for iteration in range(MAX_CRITIQUE_ITERATIONS):
-        critique = critique_result(
-            user_message=message,
-            plan=plan,
-            exec_result=exec_result,
-            df_context=df_ctx,
-            llm=critique_llm,
-            history=history,
-        )
-        log.info("  critique[%d]: verdict=%s reason=%s",
-                 iteration + 1,
-                 critique.get("verdict"),
-                 (critique.get("reason") or "")[:80])
-
-        if critique.get("verdict") != "fix_needed" or not critique.get("fix_task"):
-            break
-
-        prior_reasons.append((critique.get("reason") or "").strip())
-        fix_task = critique["fix_task"]
-        if prior_reasons[:-1]:
-            # Tell the codegen what previous attempts got wrong so it doesn't
-            # re-make the same mistakes. The most recent critique is the
-            # most relevant — list it last.
-            feedback_block = "\n".join(
-                f"  - attempt {i + 1}: {r}"
-                for i, r in enumerate(prior_reasons[:-1])
-                if r
-            )
-            if feedback_block:
-                fix_task = (
-                    f"{fix_task}\n\n"
-                    f"PRIOR ATTEMPTS (already tried — do NOT repeat these mistakes):\n"
-                    f"{feedback_block}"
-                )
-
-        log.info("  critique[%d] → running fix codegen step", iteration + 1)
+    if critique.get("verdict") == "fix_needed" and critique.get("fix_task"):
+        log.info("  critique → running fix codegen step")
         fix_plan = {
             "output_type": exec_result.get("output_type", "query"),
             "steps": [{
-                "step_num": f"fix-{iteration + 1}",
-                "description": f"Critique-driven fix (iter {iteration + 1})",
-                "codegen": {"task": fix_task, "produces": "table"},
+                "step_num": "fix",
+                "description": "Critique-driven fix",
+                "codegen": {"task": critique["fix_task"], "produces": "table"},
             }],
         }
         fix_result = execute_plan(
@@ -275,33 +229,31 @@ def run_datascience_agent(
         fix_final_df = fix_result.get("final_df")
         fix_charts = fix_result.get("charts_plotly") or []
         fix_stdout = (fix_result.get("stdout") or "").strip()
-        if fix_final_df is None and not fix_stdout and not fix_charts:
-            log.info("  critique[%d] fix produced nothing — keeping original", iteration + 1)
-            break
-        # The critique deemed the output wrong, so the fix REPLACES the
-        # user-facing artifacts. Only keep the original table/chart when the
-        # fix itself produced none — that way a fix that only added clarifying
-        # text doesn't accidentally wipe the answer.
-        new_final_df = (
-            fix_final_df if fix_final_df is not None
-            else exec_result.get("final_df")
-        )
-        new_charts = fix_charts if fix_charts else exec_result.get("charts_plotly", [])
-        exec_result = {
-            **exec_result,
-            "final_df": new_final_df,
-            "stdout": (
-                (exec_result.get("stdout") or "")
-                + "\n"
-                + fix_stdout
-            ).strip(),
-            "code": (
-                (exec_result.get("code") or "")
-                + f"\n\n# Critique fix (iter {iteration + 1})\n"
-                + (fix_result.get("code") or "")
-            ).strip(),
-            "charts_plotly": new_charts,
-        }
+        if fix_final_df is not None or fix_stdout or fix_charts:
+            # The critique deemed the original output wrong, so the fix REPLACES
+            # the user-facing artifacts. Only keep the original's table/chart
+            # when the fix itself produced none — that way a fix that only
+            # added clarifying text doesn't accidentally wipe the answer.
+            new_final_df = (
+                fix_final_df if fix_final_df is not None
+                else exec_result.get("final_df")
+            )
+            new_charts = fix_charts if fix_charts else exec_result.get("charts_plotly", [])
+            exec_result = {
+                **exec_result,
+                "final_df": new_final_df,
+                "stdout": (
+                    (exec_result.get("stdout") or "")
+                    + "\n"
+                    + fix_stdout
+                ).strip(),
+                "code": (
+                    (exec_result.get("code") or "")
+                    + "\n\n# Critique fix\n"
+                    + (fix_result.get("code") or "")
+                ).strip(),
+                "charts_plotly": new_charts,
+            }
 
     # Step 6c: Adaptive replanning — the planner gets to see the actual output
     # and propose follow-up steps if the answer is objectively incomplete.
