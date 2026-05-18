@@ -14,7 +14,7 @@ ALL_MODELS = [
     ModelInfo(id="gpt-4o-mini",       label="GPT-4o mini",    provider="openai",    badge="Fast"),
     ModelInfo(id="gpt-4o",            label="GPT-4o",         provider="openai",    badge="Smart"),
     ModelInfo(id="claude-haiku-4-5",  label="Claude Haiku",   provider="anthropic", badge="Fast"),
-    ModelInfo(id="claude-sonnet-4-5", label="Claude Sonnet",  provider="anthropic", badge="Smart"),
+    ModelInfo(id="claude-sonnet-4-6", label="Claude Sonnet",  provider="anthropic", badge="Smart"),
     ModelInfo(id="claude-opus-4-7",   label="Claude Opus",    provider="anthropic", badge="Powerful"),
 ]
 
