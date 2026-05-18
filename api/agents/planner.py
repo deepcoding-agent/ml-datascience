@@ -583,7 +583,9 @@ DataFrame. So plan accordingly:
   - "generate" → cleaning, transforms, data generation — anything that creates/modifies data
 
 ### When to create a chart vs NOT — THINK before adding any visualization
-**Only create a chart when the user explicitly asks for one OR when the answer is genuinely better as a visual.**
+**Only create a chart when (1) the user explicitly asks AND (2) the data is actually
+plottable. Either condition failing means NO viz step. An empty axis with no bars is
+worse than no chart at all.**
 
 DO create a chart when the user says:
 - "show", "plot", "chart", "graph", "visualize", "แสดงกราฟ", "พล็อต", "ดูเป็นภาพ"
@@ -597,7 +599,26 @@ Do NOT create a chart when the user asks:
 - ANY yes/no question: "is there correlation?" → stats.correlation → text answer
 
 **Rule: if the answer can be a number, a sentence, or a small table — do NOT add a chart step.**
-**Only add viz when the user asks for it OR the result truly needs a visual (e.g. distribution of 1000 values).**
+
+### Data-suitability check — MANDATORY before adding any viz step
+Even when the user asks for a chart, INSPECT the DATASET section above and SKIP the
+viz step if any of these are true (return text/table only):
+
+- **No numeric or low-cardinality categorical column exists.** A column is "low-cardinality
+  categorical" only if its unique count is ≤ ~30 AND its values are short tokens, not prose.
+- **The column you would plot is freeform text** — descriptions, code, markdown, schemas,
+  multi-sentence content, or anything where the typical cell length exceeds ~30 characters.
+  Plotting "value counts" of such a column gives N bars of height 1 — useless.
+- **Cardinality equals row count** for the plotted column (every row unique) — bar/pie/count
+  would show only height-1 bars and convey nothing.
+- **All-null or constant column** — nothing varies to visualize.
+- **Fewer than ~3 distinct values to show** — a 1-bar or 2-bar chart is noise, not signal.
+- **The whole dataset is project notes, task lists, documentation, schemas, or prose** — no
+  meaningful axis exists. Respond with a table or text summary only.
+
+A chart that would render with empty axes or single-height bars is a FAILURE worse than
+omitting it. When unsure → omit and explain in text. The user can ask for a specific
+visualization on a specific column afterwards.
 
 ### Chart selection — when a chart IS needed
 When the user explicitly asks for a visualization, REASON about:

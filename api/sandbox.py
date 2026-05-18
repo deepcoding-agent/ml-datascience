@@ -127,6 +127,31 @@ _PREPPILOT_LAYOUT = dict(
               "#6B4226", "#A8DADC", "#457B9D", "#1D3557"],
 )
 
+
+def _figure_has_data(fig) -> bool:  # type: ignore[no-untyped-def]
+    """Return True iff at least one trace carries at least one data point.
+
+    Drops figures the planner/codegen produced over text-heavy / empty data
+    — those render as "Topic counts" axes with no bars. Per-trace check
+    covers bar/scatter/line/box (x/y), pie/donut (values/labels), heatmap (z),
+    maps (lat/lon), and finance (open/close). Anything else falls back to a
+    truthy check on the first numeric-shaped attribute we can find.
+    """
+    if not fig.data:
+        return False
+    for trace in fig.data:
+        for attr in ("x", "y", "values", "z", "labels", "lat", "lon", "open", "close"):
+            v = getattr(trace, attr, None)
+            if v is None:
+                continue
+            try:
+                if len(v) > 0:
+                    return True
+            except TypeError:
+                # Scalar attribute — treat as having data.
+                return True
+    return False
+
 # ── Result variable priority (most explicit → least) ─────────────────────────
 _RESULT_PRIORITY = [
     "result", "df_result", "output_df", "df_out",
@@ -262,13 +287,21 @@ def _execute(
 
         stdout = stdout or "(code ran successfully, no output)"
 
-        # Capture Plotly figures from namespace and apply PrepPilot theme
+        # Capture Plotly figures from namespace and apply PrepPilot theme.
+        # Empty figures (axes only, no actual data) are silently dropped — they
+        # show up as misleading "blank chart" cards in the UI when the codegen
+        # ran on text-heavy / unique-per-row data the planner shouldn't have
+        # picked. See _figure_has_data() above and the planner data-suitability
+        # rules in api/agents/planner.py.
         if _PLOTLY:
             seen_ids: set[int] = set()
             for val in ns.values():
                 if hasattr(val, "to_json") and type(val).__module__.startswith("plotly") and id(val) not in seen_ids:
                     seen_ids.add(id(val))
                     try:
+                        if not _figure_has_data(val):
+                            log.info("sandbox: dropping empty Plotly figure (no data in any trace)")
+                            continue
                         val.update_layout(**_PREPPILOT_LAYOUT)
                         captured_plotly.append(val.to_json())
                     except Exception:

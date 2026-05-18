@@ -142,7 +142,12 @@ fig = px.bar(result, ...)
 - Print key findings with exact numbers — the interpreter uses these to build the response
 - Use format specifiers: {{value:,.2f}} for numbers, {{value:.1f}}% for percentages
 - Create a `result` DataFrame when the user would benefit from seeing a table
-- Create a `fig` Plotly chart when visualization would help understanding
+- Create a `fig` Plotly chart ONLY when a visualization would be meaningful — same
+  data-suitability gates as the planner: skip charts when the target column is
+  freeform text / unique-per-row / constant / has < 3 distinct values, or when the
+  dataset is prose/notes/schemas. Returning just `result` and `print(...)` is the
+  correct answer for many requests; do NOT force a `fig` to "be helpful". An empty
+  axis is worse than no chart.
 - Do NOT print raw DataFrames with df.to_string() — print human-readable summaries instead
 
 ## OUTPUT
