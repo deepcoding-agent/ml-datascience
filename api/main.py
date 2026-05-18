@@ -32,9 +32,9 @@ from api.logger import get_logger
 from api.routes.auto_clean import router as auto_clean_router
 from api.routes.auto_prepare import router as auto_prepare_router
 from api.routes.chat import router as chat_router
-from api.routes.documents import router as documents_router
+from api.routes.biz_report import router as biz_report_router
+from api.routes.eda import router as eda_doc_router
 from api.routes.eda_report import router as eda_router
-from api.routes.insights import router as insights_router
 from api.routes.models import router as models_router
 from api.routes.parse_file import router as parse_file_router
 from api.routes.predict import router as predict_router
@@ -123,9 +123,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(auto_clean_router)
 app.include_router(auto_prepare_router)
 app.include_router(chat_router)
-app.include_router(documents_router)
+app.include_router(biz_report_router)
+app.include_router(eda_doc_router)
 app.include_router(eda_router)
-app.include_router(insights_router)
 app.include_router(models_router)
 app.include_router(parse_file_router)
 app.include_router(predict_router)
