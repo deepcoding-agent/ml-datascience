@@ -73,8 +73,14 @@ def get_llm(
 
 
 def get_default_model_id() -> str:
-    """Returns the default model ID from environment."""
-    return os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
+    """Returns the default model ID from environment.
+
+    The env var is historically named OPENAI_MODEL but the value can be any
+    supported model id (OpenAI or Anthropic). Default fallback is Claude
+    Haiku 4.5 — fastest model in the picker with strong instruction
+    following.
+    """
+    return os.environ.get("OPENAI_MODEL", "claude-haiku-4-5")
 
 
 def build_lc_history(
