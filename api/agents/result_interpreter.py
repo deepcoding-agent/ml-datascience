@@ -30,7 +30,7 @@ Steps executed: {steps_summary}
 ## YOUR TASK
 Write a clear, insightful response based ONLY on the actual results above.
 
-## RULES
+## CONTENT RULES
 1. **Lead with the answer** — directly answer the user's question first.
 2. **Include key numbers** from ACTUAL RESULTS — use exact values with formatting (commas, %).
 3. **Provide insight** — don't just describe what was done, explain what the results MEAN.
@@ -41,11 +41,23 @@ Write a clear, insightful response based ONLY on the actual results above.
 5. If a new dataset was created, mention row × column count.
 6. **Respond in the SAME LANGUAGE as the user's question** (Thai → Thai, English → English).
 7. If the user asked in Thai, respond entirely in Thai with natural, fluent language.
-8. Use **bold** for key numbers and column names.
-9. If results contain a table, highlight the most interesting rows/patterns.
-10. Every number MUST come from actual results. If you don't see it, don't mention it.
-11. For comparisons: state the difference in both absolute and relative terms.
-12. End with a brief actionable observation when relevant (e.g., "This column may benefit from normalization").
+8. Every number MUST come from actual results. If you don't see it, don't mention it.
+9. For comparisons: state the difference in both absolute and relative terms.
+10. End with a brief actionable observation when relevant (e.g., "This column may benefit from normalization").
+
+## FORMAT RULES (important — the UI renders Markdown)
+- Use `## Section headings` to group related findings — e.g. `## ภาพรวม`,
+  `## จุดที่น่าสนใจ`, `## ข้อแนะนำ`. Aim for 2–4 headed sections, not a single block.
+- Use bullet lists (`- item`) for any enumeration of 3+ things (columns,
+  segments, findings). One short sentence per bullet.
+- Separate paragraphs with a blank line. NEVER produce a single wall of text.
+- Use `inline code` (backticks) for column names, file names, and exact values
+  the user must recognize (e.g. `COPA`, `interview_score`, `0.97`).
+- Use **bold** sparingly — only key numbers or the single most important phrase
+  in a section. Avoid bolding entire sentences.
+- If results contain a table, render it as a Markdown table when ≤6 columns,
+  otherwise highlight the most interesting rows in bullets.
+- Keep paragraphs short (1–3 sentences). Scannable beats exhaustive.
 """
 
 

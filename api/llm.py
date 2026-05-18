@@ -9,9 +9,19 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from api.models import ChatMessage
 
-OPENAI_MODELS = {"gpt-4o-mini", "gpt-4o"}
+OPENAI_MODELS = {"gpt-4o-mini", "gpt-4o", "gpt-5", "gpt-5-mini", "gpt-5.4-nano"}
 ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
-                    "claude-sonnet-4-6", "claude-opus-4-6"}
+                    "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
+
+# Models where the `temperature` parameter has been deprecated by the provider.
+# Sending it returns 400 invalid_request_error. Newer reasoning-style models
+# (Anthropic 4-6+/Opus 4-7, OpenAI GPT-5 family) use fixed internal sampling.
+NO_TEMPERATURE_MODELS = {
+    # Anthropic (extended-thinking generation)
+    "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-6",
+    # OpenAI GPT-5 family
+    "gpt-5", "gpt-5-mini", "gpt-5.4-nano",
+}
 
 
 @lru_cache(maxsize=16)
@@ -19,18 +29,19 @@ def _make_llm(
     provider: str, api_key: str, model_name: str, temperature: float, max_tokens: int,
 ) -> Union["ChatOpenAI", "ChatAnthropic"]:  # type: ignore[name-defined]
     """Internal cached constructor — keyed on (provider, key, model, temp, max_tokens)."""
+    accepts_temp = model_name not in NO_TEMPERATURE_MODELS
     if provider == "openai":
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=model_name, temperature=temperature,
-            api_key=api_key, max_tokens=max_tokens,
-        )
+        kwargs: dict = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        if accepts_temp:
+            kwargs["temperature"] = temperature
+        return ChatOpenAI(**kwargs)
     else:
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(
-            model=model_name, temperature=temperature,
-            api_key=api_key, max_tokens=max_tokens,
-        )
+        kwargs = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        if accepts_temp:
+            kwargs["temperature"] = temperature
+        return ChatAnthropic(**kwargs)
 
 
 def get_llm(
@@ -63,7 +74,7 @@ def get_llm(
 
 def get_default_model_id() -> str:
     """Returns the default model ID from environment."""
-    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    return os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
 
 
 def build_lc_history(
