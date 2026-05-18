@@ -11,7 +11,7 @@ from api.models import ChatMessage
 
 OPENAI_MODELS = {"gpt-4o-mini", "gpt-4o"}
 ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
-                    "claude-sonnet-4-6", "claude-opus-4-6"}
+                    "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
 
 
 @lru_cache(maxsize=16)
