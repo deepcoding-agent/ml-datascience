@@ -29,7 +29,17 @@ services:
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-6
       - key: SANDBOX_TIMEOUT_SECONDS
-        value: "30"
+        value: "60"
+      # Single-process joblib/sklearn — protects the worker from leaking
+      # child processes when the sandbox thread is abandoned on timeout.
+      - key: LOKY_MAX_CPU_COUNT
+        value: "1"
+      - key: JOBLIB_MULTIPROCESSING
+        value: "0"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
       - key: MODELS_DIR
         value: /app/models
       # Secrets — set values in Render dashboard (Environment tab).
