@@ -18,19 +18,20 @@ ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
                     "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
 
 # Hard fallback when an unknown / retired model_id is requested. Matches the
-# project default (GPT-5.4 nano) — fastest reasoning model in the picker with
-# strong instruction following and OPENAI_API_KEY is always provisioned.
-FALLBACK_MODEL_ID = "gpt-5.4-nano"
+# project default (Claude Haiku 4.5) — fastest non-reasoning model in the
+# picker with strong instruction following, ANTHROPIC_API_KEY is always
+# provisioned, and it skips the thinking-token overhead of reasoning models.
+FALLBACK_MODEL_ID = "claude-haiku-4-5"
 
 # Cross-provider failover chain for every LLM invocation. When the primary
-# model returns a transient error (OpenAI 503, Anthropic 529 overloaded,
+# model returns a transient error (Anthropic 529 overloaded, OpenAI 503,
 # timeout, network reset), we walk this chain until one succeeds. Mixing
 # providers means a single-provider outage doesn't take the agent down.
 MODEL_FAILOVER_CHAIN = [
-    "gpt-5.4-nano",       # fastest OpenAI reasoning, project default
-    "claude-haiku-4-5",   # cross-provider safety (Anthropic, fast)
-    "gpt-5-mini",         # same-provider larger / more headroom
-    "claude-sonnet-4-6",  # final cross-provider attempt
+    "claude-haiku-4-5",   # primary default (Anthropic, fastest)
+    "gpt-5.4-nano",       # cross-provider safety (OpenAI)
+    "claude-sonnet-4-6",  # same-provider larger / more headroom
+    "gpt-5-mini",         # final cross-provider attempt
 ]
 
 # Models where the `temperature` parameter has been deprecated by the provider.
@@ -161,11 +162,11 @@ def get_default_model_id() -> str:
     """Returns the default model ID from environment.
 
     The env var is historically named OPENAI_MODEL but the value can be any
-    supported model id (OpenAI or Anthropic). Default fallback is GPT-5.4
-    nano — fastest reasoning model in the picker, strong instruction
-    following, available wherever OPENAI_API_KEY is provisioned.
+    supported model id (OpenAI or Anthropic). Default fallback is Claude
+    Haiku 4.5 — fastest model in the picker with strong instruction
+    following.
     """
-    return os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
+    return os.environ.get("OPENAI_MODEL", "claude-haiku-4-5")
 
 
 def invoke_with_failover(
