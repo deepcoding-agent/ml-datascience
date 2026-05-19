@@ -13,7 +13,7 @@ primary_region = 'sin'
   ANTHROPIC_MODEL = 'claude-sonnet-4-6'
   LOG_LEVEL = 'info'
   MODELS_DIR = '/app/models'
-  OPENAI_MODEL = 'claude-haiku-4-5'
+  OPENAI_MODEL = 'gpt-5.4-nano'
   PYTHONUNBUFFERED = '1'
   SANDBOX_TIMEOUT_SECONDS = '60'
 
