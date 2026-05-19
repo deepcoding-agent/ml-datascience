@@ -12,7 +12,6 @@ Split from /eda so analysts and stakeholders each get a report tuned to them.
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -34,6 +33,8 @@ from api.agents.document_agent import (
     _format_for_llm,
     _high_cardinality_cats,
     _ml_readiness,
+    _normalize_string_lists,
+    _parse_llm_json,
 )
 from api.llm import get_llm
 from api.logger import get_logger
@@ -223,7 +224,7 @@ def run_biz_report(
     }
     charts = {k: v for k, v in charts.items() if v is not None}
 
-    analysis_text = _format_for_llm(df, analysis, column_profiles)
+    analysis_text = _format_for_llm(analysis, column_profiles)
     sections = _biz_narrative(analysis_text, dataset_name, model_id)
 
     # Reuse the same quality score calc — biz audiences benefit from knowing it too.
@@ -256,15 +257,10 @@ def run_biz_report(
 def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """LLM narrator for the business report. Falls back to a stub on failure."""
     try:
-        llm = get_llm(temperature=0.3, max_tokens=4096, model_id=model_id)
+        llm = get_llm(temperature=0.3, max_tokens=8192, model_id=model_id)
         prompt = BIZ_PROMPT.format(analysis=analysis_text)
         response = llm.invoke([HumanMessage(content=prompt)])
-        raw = response.content.strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
-        sections = json.loads(raw)
+        sections = _normalize_string_lists(_parse_llm_json(response.content))
         log.info("Biz narrative parsed: %d sections", len(sections))
         return sections
     except Exception as exc:

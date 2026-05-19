@@ -7,11 +7,19 @@ from typing import Union
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from api.logger import get_logger
 from api.models import ChatMessage
+
+log = get_logger(__name__)
 
 OPENAI_MODELS = {"gpt-5", "gpt-5-mini", "gpt-5.4-nano"}
 ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
                     "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
+
+# Hard fallback when an unknown / retired model_id is requested. Matches the
+# project default (Claude Haiku 4.5) — fastest model in the picker with strong
+# instruction following and ANTHROPIC_API_KEY is always provisioned on Render.
+FALLBACK_MODEL_ID = "claude-haiku-4-5"
 
 # Models where the `temperature` parameter has been deprecated by the provider.
 # Sending it returns 400 invalid_request_error. Newer reasoning-style models
@@ -51,9 +59,21 @@ def get_llm(
 ) -> Union["ChatOpenAI", "ChatAnthropic"]:  # type: ignore[name-defined]
     """
     Return a cached LLM instance. Auto-detects provider from model_id.
-    Falls back to env var defaults if model_id is not provided.
+    Falls back to env var defaults if model_id is not provided. If the
+    requested model is unknown (older picker entry persisted in DB,
+    front-end build mismatch), logs a warning and silently downgrades
+    to FALLBACK_MODEL_ID instead of raising — keeps Render deployments
+    resilient to stale client state.
     """
-    active_model = model_id or get_default_model_id()
+    requested = model_id or get_default_model_id()
+    active_model = requested
+    if active_model not in OPENAI_MODELS and active_model not in ANTHROPIC_MODELS:
+        log.warning(
+            "Unknown model_id '%s' — falling back to '%s'. "
+            "Supported: %s",
+            active_model, FALLBACK_MODEL_ID, OPENAI_MODELS | ANTHROPIC_MODELS,
+        )
+        active_model = FALLBACK_MODEL_ID
 
     if active_model in OPENAI_MODELS:
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -65,11 +85,10 @@ def get_llm(
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set.")
         return _make_llm("anthropic", api_key, active_model, temperature, max_tokens)
-    else:
-        raise ValueError(
-            f"Unknown model_id: {active_model}. "
-            f"Supported: {OPENAI_MODELS | ANTHROPIC_MODELS}"
-        )
+    raise RuntimeError(
+        f"Fallback model '{FALLBACK_MODEL_ID}' is itself not in any whitelist — "
+        "check OPENAI_MODELS / ANTHROPIC_MODELS in api/llm.py."
+    )
 
 
 def get_default_model_id() -> str:
