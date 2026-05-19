@@ -43,6 +43,13 @@ NO_TEMPERATURE_MODELS = {
     "gpt-5", "gpt-5-mini", "gpt-5.4-nano",
 }
 
+# Reasoning models count thinking tokens against max_tokens, so a budget set
+# for a non-reasoning model (e.g. max_tokens=10 to extract YES/NO) burns out
+# during the thinking phase and provider returns 400 "max_tokens reached".
+# Apply a floor when the active model is in NO_TEMPERATURE_MODELS so legacy
+# call sites with tight budgets still work without per-site refactor.
+_REASONING_TOKEN_FLOOR = 4096
+
 
 @lru_cache(maxsize=16)
 def _make_llm(
@@ -83,6 +90,14 @@ def _get_raw_llm(
             active_model, FALLBACK_MODEL_ID, OPENAI_MODELS | ANTHROPIC_MODELS,
         )
         active_model = FALLBACK_MODEL_ID
+
+    # Auto-bump max_tokens for reasoning models — thinking burns budget too.
+    if active_model in NO_TEMPERATURE_MODELS and max_tokens < _REASONING_TOKEN_FLOOR:
+        log.debug(
+            "Bumping max_tokens %d→%d for reasoning model '%s'",
+            max_tokens, _REASONING_TOKEN_FLOOR, active_model,
+        )
+        max_tokens = _REASONING_TOKEN_FLOOR
 
     if active_model in OPENAI_MODELS:
         api_key = os.environ.get("OPENAI_API_KEY", "")
