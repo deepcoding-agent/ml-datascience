@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -354,7 +355,7 @@ def run_document(
     # ── 3. Column profiles already built above for target detection ──────
 
     # ── 4. AI narrative ──────────────────────────────────────────────
-    analysis_text = _format_for_llm(analysis, column_profiles)
+    analysis_text = _format_for_llm(df, analysis, column_profiles)
     sections = _ai_narrative(analysis_text, dataset_name, model_id)
 
     # ── 5. Quality score ─────────────────────────────────────────────
@@ -571,7 +572,7 @@ def _high_cardinality_cats(df: pd.DataFrame, cat_cols: list[str]) -> list[dict]:
     return results
 
 
-def _format_for_llm(analysis: dict, profiles: list[dict]) -> str:
+def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> str:
     ov = analysis["overview"]
     lines = [
         f"Shape: {ov['rows']:,} rows x {ov['columns']} columns",
@@ -652,122 +653,18 @@ def _format_for_llm(analysis: dict, profiles: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# Sections rendered by DocumentReportCard as flat string[] lists. LLMs
-# occasionally return dict items (e.g. {kpi, definition, why_it_matters})
-# when they decide structured data is more useful — frontend then crashes
-# with "Objects are not valid as a React child". Normalize on the backend.
-_STRING_LIST_KEYS = {
-    "opportunities",
-    "risks",
-    "promotion_strategies",
-    "suggested_kpis",
-    "recommendations",
-}
-
-
-def _coerce_dict_to_line(item: dict) -> str:
-    """Flatten {k1: v1, k2: v2} into 'v1 — v2 — v3' for renderer display.
-
-    Drops empty values, joins the rest with em-dash. If the dict has a
-    single meaningful value, returns just that value.
-    """
-    parts = [str(v).strip() for v in item.values() if v not in (None, "", [])]
-    return " — ".join(parts) if parts else ""
-
-
-def _normalize_string_lists(sections: dict) -> dict:
-    """Coerce dict items inside known string[] fields back to strings.
-
-    Operates in-place; returns the modified dict. Non-list values and
-    string items are left alone. Dropped (empty-dict) items log a debug
-    line so we know the LLM is drifting from the schema.
-    """
-    for key in _STRING_LIST_KEYS:
-        value = sections.get(key)
-        if not isinstance(value, list):
-            continue
-        normalized: list[str] = []
-        for item in value:
-            if isinstance(item, str):
-                normalized.append(item)
-            elif isinstance(item, dict):
-                line = _coerce_dict_to_line(item)
-                if line:
-                    normalized.append(line)
-            elif item is not None:
-                normalized.append(str(item))
-        if len(normalized) != len(value):
-            log.debug("Normalized '%s': %d → %d items", key, len(value), len(normalized))
-        sections[key] = normalized
-    return sections
-
-
-def _invoke_with_retry(
-    llm,
-    messages,
-    max_attempts: int = 3,
-    base_delay: float = 1.5,
-):
-    """Invoke an LLM with exponential backoff on transient provider errors.
-
-    Anthropic returns HTTP 529 (overloaded_error) and providers occasionally
-    drop a 503/timeout — these are transient and worth retrying. Auth errors
-    (401/403) and bad-request errors (400) are NOT retried.
-    """
-    last_exc: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            return llm.invoke(messages)
-        except Exception as exc:
-            last_exc = exc
-            msg = str(exc).lower()
-            # Permanent / unrecoverable — don't waste retries
-            if any(s in msg for s in ("401", "403", "invalid api key", "unauthorized", "permission denied")):
-                raise
-            if attempt < max_attempts - 1:
-                delay = base_delay * (2 ** attempt)
-                log.warning(
-                    "LLM call failed (attempt %d/%d): %s — retry in %.1fs",
-                    attempt + 1, max_attempts, exc, delay,
-                )
-                time.sleep(delay)
-    assert last_exc is not None
-    raise last_exc
-
-
-def _parse_llm_json(raw: str) -> dict:
-    """Parse LLM JSON output with markdown stripping + json_repair salvage.
-
-    Long generations sometimes hit max_tokens mid-string, leaving the JSON
-    unterminated. Strict json.loads fails — json_repair can usually close
-    the open braces and recover the partial structure.
-    """
-    text = raw.strip()
-    if "```json" in text:
-        text = text.split("```json")[1].split("```")[0].strip()
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0].strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        from json_repair import repair_json
-        log.warning("Strict JSON parse failed (%s) — using json_repair", exc)
-        repaired = repair_json(text, return_objects=True)
-        if not isinstance(repaired, dict):
-            raise ValueError(f"json_repair returned {type(repaired).__name__}, expected dict")
-        return repaired
-
-
 def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """Use LLM to write narrative sections, fallback on failure."""
     try:
-        # 4096 keeps the request under Render's 100s edge timeout on the
-        # starter plan and avoids OOM on the 512MB worker; json_repair below
-        # salvages cases where the LLM hits the cap mid-string.
-        llm = get_llm(temperature=0.2, max_tokens=4096, model_id=model_id)
+        llm = get_llm(temperature=0.2, max_tokens=8192, model_id=model_id)
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
-        response = _invoke_with_retry(llm, [HumanMessage(content=prompt)])
-        sections = _normalize_string_lists(_parse_llm_json(response.content))
+        response = llm.invoke([HumanMessage(content=prompt)])
+        raw = response.content.strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        sections = json.loads(raw)
         log.info("Document: AI narrative complete")
         return sections
     except Exception as e:
