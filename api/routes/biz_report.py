@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.agents.biz_report_agent import run_biz_report
+from api.llm import get_default_model_id
 from api.logger import get_logger
 
 router = APIRouter()
@@ -28,8 +29,10 @@ class BizReportResponse(BaseModel):
 
 
 @router.post("/biz-report", response_model=BizReportResponse)
-async def biz_report(req: BizReportRequest) -> BizReportResponse:
-    log.info(">>> /biz-report  dataset='%s'  rows=%d", req.dataset_name, len(req.data))
+def biz_report(req: BizReportRequest) -> BizReportResponse:
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /biz-report  model=%s  dataset='%s'  rows=%d",
+             model_id, req.dataset_name, len(req.data))
     try:
         result = run_biz_report(
             data=req.data,

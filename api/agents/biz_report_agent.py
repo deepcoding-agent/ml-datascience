@@ -230,6 +230,7 @@ def run_biz_report(
 
 def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """LLM narrator for the business report. Falls back to a stub on failure."""
+    from api.agents._json_safe import safe_parse_json
     try:
         prompt = BIZ_PROMPT.format(analysis=analysis_text)
         response = invoke_with_failover(
@@ -238,12 +239,9 @@ def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) 
             temperature=0.3,
             max_tokens=8192,
         )
-        raw = response.content.strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
-        sections = json.loads(raw)
+        sections = safe_parse_json(response.content)
+        if sections is None:
+            raise ValueError("LLM returned unparseable JSON even after repair")
         log.info("Biz narrative parsed: %d sections", len(sections))
         return sections
     except Exception as exc:

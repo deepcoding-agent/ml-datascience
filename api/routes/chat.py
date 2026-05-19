@@ -20,7 +20,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit("60/minute")
-async def chat(request: Request, req: ChatRequest) -> ChatResponse:
+def chat(request: Request, req: ChatRequest) -> ChatResponse:
     model_id = req.model_id or get_default_model_id()
     mode = "ds-agent" if req.datasets else "coding-agent"
     log.info(

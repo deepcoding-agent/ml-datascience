@@ -652,9 +652,13 @@ def _tune_model(
     # at the current fold is below the median of completed trials at that fold.
     pruner = MedianPruner(n_startup_trials=3, n_warmup_steps=1, interval_steps=1)
     study = optuna.create_study(direction="maximize", pruner=pruner)
+    # Total wall-clock budget per algorithm — generous (5 min) so heavy models
+    # (RandomForest with deep trees, GBM with 500 rounds) finish, but bounded
+    # so a single runaway fit can't make /train hang the worker indefinitely.
     study.optimize(
         objective,
         n_trials=adaptive_trials,
+        timeout=300.0,
         callbacks=[lambda _study, _trial: gc.collect()],
         show_progress_bar=False,
     )

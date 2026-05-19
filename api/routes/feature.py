@@ -13,6 +13,7 @@ from fastapi import APIRouter
 
 from api.agents.feature_agent import analyze, run
 from api.agents.feature_pipeline_storage import load_pipeline, save_pipeline
+from api.llm import get_default_model_id
 from api.logger import get_logger
 from api.models import (
     FeatureAnalyzeRequest,
@@ -51,8 +52,10 @@ async def feature_pipeline_meta(pipeline_id: str) -> FeaturePipelineMeta | None:
 
 
 @router.post("/feature/analyze", response_model=FeatureAnalyzeResponse)
-async def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
-    log.info(">>> /feature/analyze dataset='%s' rows=%d", req.dataset_name, len(req.data))
+def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /feature/analyze  model=%s  dataset='%s' rows=%d",
+             model_id, req.dataset_name, len(req.data))
     if not req.data:
         return FeatureAnalyzeResponse(success=False, error="dataset is empty")
     try:
@@ -70,9 +73,11 @@ async def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
 
 
 @router.post("/feature", response_model=FeatureResponse)
-async def feature(req: FeatureRequest) -> FeatureResponse:
+def feature(req: FeatureRequest) -> FeatureResponse:
+    model_id = req.model_id or get_default_model_id()
     log.info(
-        ">>> /feature dataset='%s' rows=%d task=%s target=%s split=%s",
+        ">>> /feature  model=%s  dataset='%s' rows=%d task=%s target=%s split=%s",
+        model_id,
         req.dataset_name,
         len(req.data),
         req.config.task,

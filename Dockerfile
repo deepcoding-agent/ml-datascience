@@ -31,9 +31,13 @@ EXPOSE 8000
 ENV MODELS_DIR=/app/models \
     PYTHONUNBUFFERED=1
 
-# Health check
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# Health check — generous timeouts so a single long LLM/training request
+# can't trip a restart while the next probe is still queued.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=10 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=10)" || exit 1
 
-# Production: single worker (memory-bound on Fly shared-cpu-1x); no --reload
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Production: 2 workers so /health (and short routes) keep responding while
+# /eda or /train hog one worker for 30-90s on LLM + pandas + plotly. Routes
+# are declared sync (`def`) so FastAPI offloads each one to its threadpool
+# slot, freeing the worker's event loop to answer health probes.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]

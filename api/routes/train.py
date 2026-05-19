@@ -29,6 +29,7 @@ from api.agents.model_storage import (
 )
 from api.agents.train_agent import run_training
 from api.agents.train_setup_agent import analyze_train
+from api.llm import get_default_model_id
 from api.logger import get_logger
 from api.models import TrainAnalyzeRequest, TrainAnalyzeResponse
 
@@ -39,8 +40,10 @@ log = get_logger(__name__)
 # ── POST /train/analyze — AI-suggested training setup ──────────────────────
 
 @router.post("/train/analyze", response_model=TrainAnalyzeResponse)
-async def train_analyze(req: TrainAnalyzeRequest) -> TrainAnalyzeResponse:
-    log.info(">>> /train/analyze dataset='%s' rows=%d", req.dataset_name, len(req.data))
+def train_analyze(req: TrainAnalyzeRequest) -> TrainAnalyzeResponse:
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /train/analyze  model=%s  dataset='%s' rows=%d",
+             model_id, req.dataset_name, len(req.data))
     if not req.data:
         return TrainAnalyzeResponse(success=False, error="dataset is empty")
     try:
@@ -107,9 +110,10 @@ class TrainResponse(BaseModel):
 
 @router.post("/train", response_model=TrainResponse)
 @limiter.limit("6/minute")
-async def train(request: Request, req: TrainRequest) -> TrainResponse:
-    log.info(">>> /train  rows=%d  cols=%d  target=%s  task=%s",
-             len(req.rows), len(req.columns), req.target_column, req.task_type)
+def train(request: Request, req: TrainRequest) -> TrainResponse:
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /train  model=%s  rows=%d  cols=%d  target=%s  task=%s",
+             model_id, len(req.rows), len(req.columns), req.target_column, req.task_type)
     try:
         result = run_training(
             data=req.rows,

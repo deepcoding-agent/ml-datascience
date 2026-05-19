@@ -18,18 +18,19 @@ ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
                     "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
 
 # Hard fallback when an unknown / retired model_id is requested. Matches the
-# project default (Claude Haiku 4.5) — fastest model in the picker with strong
-# instruction following and ANTHROPIC_API_KEY is always provisioned on Render.
+# project default (Claude Haiku 4.5) — fastest non-reasoning model in the
+# picker with strong instruction following, ANTHROPIC_API_KEY is always
+# provisioned, and it skips the thinking-token overhead of reasoning models.
 FALLBACK_MODEL_ID = "claude-haiku-4-5"
 
-# Cross-provider failover chain for long-running narrators (/eda, /biz-report).
-# When the primary model returns a transient error (Anthropic 529 overloaded,
-# 503, timeout, network reset), we walk this chain until one succeeds. Mixing
+# Cross-provider failover chain for every LLM invocation. When the primary
+# model returns a transient error (Anthropic 529 overloaded, OpenAI 503,
+# timeout, network reset), we walk this chain until one succeeds. Mixing
 # providers means a single-provider outage doesn't take the agent down.
 MODEL_FAILOVER_CHAIN = [
-    "claude-haiku-4-5",   # fastest Anthropic, lowest cost
-    "gpt-5.4-nano",       # fastest OpenAI, cross-provider safety
-    "claude-sonnet-4-6",  # same provider but bigger / more headroom
+    "claude-haiku-4-5",   # primary default (Anthropic, fastest)
+    "gpt-5.4-nano",       # cross-provider safety (OpenAI)
+    "claude-sonnet-4-6",  # same-provider larger / more headroom
     "gpt-5-mini",         # final cross-provider attempt
 ]
 
@@ -43,6 +44,20 @@ NO_TEMPERATURE_MODELS = {
     "gpt-5", "gpt-5-mini", "gpt-5.4-nano",
 }
 
+# Reasoning models count thinking tokens against max_tokens, so a budget set
+# for a non-reasoning model (e.g. max_tokens=10 to extract YES/NO) burns out
+# during the thinking phase and provider returns 400 "max_tokens reached".
+# Apply a floor when the active model is in NO_TEMPERATURE_MODELS so legacy
+# call sites with tight budgets still work without per-site refactor.
+_REASONING_TOKEN_FLOOR = 4096
+
+# Per-request HTTP timeout for LLM provider calls. SDK defaults to 600 s
+# (10 minutes) which means a hung Anthropic / OpenAI connection blocks the
+# whole request and our MODEL_FAILOVER_CHAIN never gets a chance to switch
+# providers. 90 s leaves comfortable room for a normal narrator call
+# (~30-60 s) while failing fast when the provider stalls.
+_LLM_REQUEST_TIMEOUT_S = 90.0
+
 
 @lru_cache(maxsize=16)
 def _make_llm(
@@ -52,13 +67,23 @@ def _make_llm(
     accepts_temp = model_name not in NO_TEMPERATURE_MODELS
     if provider == "openai":
         from langchain_openai import ChatOpenAI
-        kwargs: dict = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        kwargs: dict = {
+            "model": model_name,
+            "api_key": api_key,
+            "max_tokens": max_tokens,
+            "timeout": _LLM_REQUEST_TIMEOUT_S,
+        }
         if accepts_temp:
             kwargs["temperature"] = temperature
         return ChatOpenAI(**kwargs)
     else:
         from langchain_anthropic import ChatAnthropic
-        kwargs = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        kwargs = {
+            "model": model_name,
+            "api_key": api_key,
+            "max_tokens": max_tokens,
+            "default_request_timeout": _LLM_REQUEST_TIMEOUT_S,
+        }
         if accepts_temp:
             kwargs["temperature"] = temperature
         return ChatAnthropic(**kwargs)
@@ -83,6 +108,14 @@ def _get_raw_llm(
             active_model, FALLBACK_MODEL_ID, OPENAI_MODELS | ANTHROPIC_MODELS,
         )
         active_model = FALLBACK_MODEL_ID
+
+    # Auto-bump max_tokens for reasoning models — thinking burns budget too.
+    if active_model in NO_TEMPERATURE_MODELS and max_tokens < _REASONING_TOKEN_FLOOR:
+        log.debug(
+            "Bumping max_tokens %d→%d for reasoning model '%s'",
+            max_tokens, _REASONING_TOKEN_FLOOR, active_model,
+        )
+        max_tokens = _REASONING_TOKEN_FLOOR
 
     if active_model in OPENAI_MODELS:
         api_key = os.environ.get("OPENAI_API_KEY", "")

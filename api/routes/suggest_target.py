@@ -33,7 +33,7 @@ Reply ONLY with valid JSON, no markdown:
 
 
 @router.post("/suggest-target", response_model=SuggestTargetResponse)
-async def suggest_target(req: SuggestTargetRequest) -> SuggestTargetResponse:
+def suggest_target(req: SuggestTargetRequest) -> SuggestTargetResponse:
     cols = req.columns
     if not cols:
         log.warning("/suggest-target called with no columns")

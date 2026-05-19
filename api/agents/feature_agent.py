@@ -265,17 +265,9 @@ def _parse_llm_config(raw: str, heuristic: dict, valid_cols: set[str]) -> tuple[
     """Parse LLM JSON output, validate every field against allowed enums + column
     names, fall back to heuristic for invalid fields. Returns (config_dict,
     reasoning) on success, None on hard parse failure."""
-    text = raw.strip()
-    if "```json" in text:
-        text = text.split("```json", 1)[1].split("```", 1)[0].strip()
-    elif "```" in text:
-        text = text.split("```", 1)[1].split("```", 1)[0].strip()
-
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
+    from api.agents._json_safe import safe_parse_json
+    parsed = safe_parse_json(raw)
+    if parsed is None:
         return None
 
     merged = dict(heuristic)
