@@ -9,11 +9,28 @@ Run
 """
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
+class _HealthAccessFilter(logging.Filter):
+    """Hide /health probe lines from uvicorn's access log.
+
+    Render's edge probes /health every ~5 s, Docker HEALTHCHECK adds more
+    on top, and at that rate the access log buries real API traffic. The
+    probes themselves are cheap (return {"status":"ok"} in microseconds);
+    we just don't need each one printed.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
 
 # Load .env from the api/ directory (works regardless of where uvicorn is launched from)
 load_dotenv(Path(__file__).parent / ".env")
