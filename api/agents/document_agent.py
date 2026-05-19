@@ -655,6 +655,7 @@ def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> s
 
 def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """Use LLM to write narrative sections, fallback on failure."""
+    from api.agents._json_safe import safe_parse_json
     try:
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
         response = invoke_with_failover(
@@ -663,12 +664,9 @@ def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -
             temperature=0.2,
             max_tokens=8192,
         )
-        raw = response.content.strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
-        sections = json.loads(raw)
+        sections = safe_parse_json(response.content)
+        if sections is None:
+            raise ValueError("LLM returned unparseable JSON even after repair")
         log.info("Document: AI narrative complete")
         return sections
     except Exception as e:
