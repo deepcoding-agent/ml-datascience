@@ -51,6 +51,13 @@ NO_TEMPERATURE_MODELS = {
 # call sites with tight budgets still work without per-site refactor.
 _REASONING_TOKEN_FLOOR = 4096
 
+# Per-request HTTP timeout for LLM provider calls. SDK defaults to 600 s
+# (10 minutes) which means a hung Anthropic / OpenAI connection blocks the
+# whole request and our MODEL_FAILOVER_CHAIN never gets a chance to switch
+# providers. 90 s leaves comfortable room for a normal narrator call
+# (~30-60 s) while failing fast when the provider stalls.
+_LLM_REQUEST_TIMEOUT_S = 90.0
+
 
 @lru_cache(maxsize=16)
 def _make_llm(
@@ -60,13 +67,23 @@ def _make_llm(
     accepts_temp = model_name not in NO_TEMPERATURE_MODELS
     if provider == "openai":
         from langchain_openai import ChatOpenAI
-        kwargs: dict = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        kwargs: dict = {
+            "model": model_name,
+            "api_key": api_key,
+            "max_tokens": max_tokens,
+            "timeout": _LLM_REQUEST_TIMEOUT_S,
+        }
         if accepts_temp:
             kwargs["temperature"] = temperature
         return ChatOpenAI(**kwargs)
     else:
         from langchain_anthropic import ChatAnthropic
-        kwargs = {"model": model_name, "api_key": api_key, "max_tokens": max_tokens}
+        kwargs = {
+            "model": model_name,
+            "api_key": api_key,
+            "max_tokens": max_tokens,
+            "default_request_timeout": _LLM_REQUEST_TIMEOUT_S,
+        }
         if accepts_temp:
             kwargs["temperature"] = temperature
         return ChatAnthropic(**kwargs)
