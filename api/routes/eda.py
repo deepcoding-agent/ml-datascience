@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.agents.document_agent import run_document
+from api.llm import get_default_model_id
 from api.logger import get_logger
 
 router = APIRouter()
@@ -29,7 +30,9 @@ class EDADocumentResponse(BaseModel):
 
 @router.post("/eda", response_model=EDADocumentResponse)
 async def eda(req: EDADocumentRequest) -> EDADocumentResponse:
-    log.info(">>> /eda  dataset='%s'  rows=%d", req.dataset_name, len(req.data))
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /eda  model=%s  dataset='%s'  rows=%d",
+             model_id, req.dataset_name, len(req.data))
     try:
         result = run_document(
             data=req.data,

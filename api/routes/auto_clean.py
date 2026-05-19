@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.agents.auto_cleaner import run_auto_clean
+from api.llm import get_default_model_id
 from api.logger import get_logger
 
 router = APIRouter()
@@ -30,7 +31,9 @@ class AutoCleanResponse(BaseModel):
 
 @router.post("/auto-clean", response_model=AutoCleanResponse)
 async def auto_clean(req: AutoCleanRequest) -> AutoCleanResponse:
-    log.info(">>> /auto-clean  dataset='%s'  rows=%d", req.dataset_name, len(req.data))
+    model_id = req.model_id or get_default_model_id()
+    log.info(">>> /auto-clean  model=%s  dataset='%s'  rows=%d",
+             model_id, req.dataset_name, len(req.data))
     try:
         result = run_auto_clean(data=req.data, model_id=req.model_id)
         log.info(
