@@ -728,7 +728,10 @@ def _parse_llm_json(raw: str) -> dict:
 def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """Use LLM to write narrative sections, fallback on failure."""
     try:
-        llm = get_llm(temperature=0.2, max_tokens=8192, model_id=model_id)
+        # 4096 keeps the request under Render's 100s edge timeout on the
+        # starter plan and avoids OOM on the 512MB worker; json_repair below
+        # salvages cases where the LLM hits the cap mid-string.
+        llm = get_llm(temperature=0.2, max_tokens=4096, model_id=model_id)
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
         response = llm.invoke([HumanMessage(content=prompt)])
         sections = _normalize_string_lists(_parse_llm_json(response.content))

@@ -257,7 +257,10 @@ def run_biz_report(
 def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """LLM narrator for the business report. Falls back to a stub on failure."""
     try:
-        llm = get_llm(temperature=0.3, max_tokens=8192, model_id=model_id)
+        # 4096 keeps the request under Render's 100s edge timeout on the
+        # starter plan and avoids OOM on the 512MB worker; json_repair below
+        # salvages cases where the LLM hits the cap mid-string.
+        llm = get_llm(temperature=0.3, max_tokens=4096, model_id=model_id)
         prompt = BIZ_PROMPT.format(analysis=analysis_text)
         response = llm.invoke([HumanMessage(content=prompt)])
         sections = _normalize_string_lists(_parse_llm_json(response.content))
