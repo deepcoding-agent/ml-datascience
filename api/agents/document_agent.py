@@ -19,7 +19,7 @@ from plotly.subplots import make_subplots
 from langchain_core.messages import HumanMessage
 
 from api.agents.context_analyzer import analyze_context
-from api.llm import get_llm
+from api.llm import invoke_with_failover
 from api.logger import get_logger
 
 log = get_logger(__name__)
@@ -656,9 +656,13 @@ def _format_for_llm(df: pd.DataFrame, analysis: dict, profiles: list[dict]) -> s
 def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """Use LLM to write narrative sections, fallback on failure."""
     try:
-        llm = get_llm(temperature=0.2, max_tokens=8192, model_id=model_id)
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = invoke_with_failover(
+            [HumanMessage(content=prompt)],
+            model_id=model_id,
+            temperature=0.2,
+            max_tokens=8192,
+        )
         raw = response.content.strip()
         if "```json" in raw:
             raw = raw.split("```json")[1].split("```")[0].strip()

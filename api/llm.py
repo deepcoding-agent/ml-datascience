@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from functools import lru_cache
 from typing import Union
 
@@ -20,6 +21,17 @@ ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
 # project default (Claude Haiku 4.5) — fastest model in the picker with strong
 # instruction following and ANTHROPIC_API_KEY is always provisioned on Render.
 FALLBACK_MODEL_ID = "claude-haiku-4-5"
+
+# Cross-provider failover chain for long-running narrators (/eda, /biz-report).
+# When the primary model returns a transient error (Anthropic 529 overloaded,
+# 503, timeout, network reset), we walk this chain until one succeeds. Mixing
+# providers means a single-provider outage doesn't take the agent down.
+MODEL_FAILOVER_CHAIN = [
+    "claude-haiku-4-5",   # fastest Anthropic, lowest cost
+    "gpt-5.4-nano",       # fastest OpenAI, cross-provider safety
+    "claude-sonnet-4-6",  # same provider but bigger / more headroom
+    "gpt-5-mini",         # final cross-provider attempt
+]
 
 # Models where the `temperature` parameter has been deprecated by the provider.
 # Sending it returns 400 invalid_request_error. Newer reasoning-style models
@@ -100,6 +112,49 @@ def get_default_model_id() -> str:
     following.
     """
     return os.environ.get("OPENAI_MODEL", "claude-haiku-4-5")
+
+
+def invoke_with_failover(
+    messages: list,
+    model_id: str | None = None,
+    temperature: float = 0.0,
+    max_tokens: int = 4096,
+    max_attempts: int = 4,
+    base_delay: float = 1.2,
+):
+    """Invoke an LLM, failing over to other models on transient errors.
+
+    Walks MODEL_FAILOVER_CHAIN until one model succeeds or all are exhausted.
+    The user-selected primary is tried first; deduplicated, the chain visits
+    a cross-provider candidate next so a single provider outage doesn't kill
+    the request. Small exponential backoff between attempts.
+
+    Returns the LangChain response object. Raises the last exception if all
+    chain members fail.
+    """
+    primary = model_id or get_default_model_id()
+    chain = [primary] + [m for m in MODEL_FAILOVER_CHAIN if m != primary]
+    chain = chain[:max_attempts]
+    last_exc: Exception | None = None
+    for i, mid in enumerate(chain):
+        try:
+            llm = get_llm(temperature=temperature, max_tokens=max_tokens, model_id=mid)
+            result = llm.invoke(messages)
+            if i > 0:
+                log.info("LLM failover succeeded on '%s' after %d failed attempts", mid, i)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            if i < len(chain) - 1:
+                delay = base_delay * (1.5 ** i)
+                log.warning(
+                    "LLM '%s' failed (%s) — failing over to '%s' in %.1fs",
+                    mid, exc, chain[i + 1], delay,
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    log.warning("All %d models in failover chain failed; last: %s", len(chain), last_exc)
+    raise last_exc
 
 
 def build_lc_history(
