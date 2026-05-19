@@ -702,6 +702,39 @@ def _normalize_string_lists(sections: dict) -> dict:
     return sections
 
 
+def _invoke_with_retry(
+    llm,
+    messages,
+    max_attempts: int = 3,
+    base_delay: float = 1.5,
+):
+    """Invoke an LLM with exponential backoff on transient provider errors.
+
+    Anthropic returns HTTP 529 (overloaded_error) and providers occasionally
+    drop a 503/timeout — these are transient and worth retrying. Auth errors
+    (401/403) and bad-request errors (400) are NOT retried.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return llm.invoke(messages)
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            # Permanent / unrecoverable — don't waste retries
+            if any(s in msg for s in ("401", "403", "invalid api key", "unauthorized", "permission denied")):
+                raise
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                log.warning(
+                    "LLM call failed (attempt %d/%d): %s — retry in %.1fs",
+                    attempt + 1, max_attempts, exc, delay,
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
 def _parse_llm_json(raw: str) -> dict:
     """Parse LLM JSON output with markdown stripping + json_repair salvage.
 
@@ -733,7 +766,7 @@ def _ai_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -
         # salvages cases where the LLM hits the cap mid-string.
         llm = get_llm(temperature=0.2, max_tokens=4096, model_id=model_id)
         prompt = DOCUMENT_PROMPT.format(analysis=analysis_text)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = _invoke_with_retry(llm, [HumanMessage(content=prompt)])
         sections = _normalize_string_lists(_parse_llm_json(response.content))
         log.info("Document: AI narrative complete")
         return sections

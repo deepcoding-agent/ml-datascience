@@ -32,6 +32,7 @@ from api.agents.document_agent import (
     _detect_target_candidates,
     _format_for_llm,
     _high_cardinality_cats,
+    _invoke_with_retry,
     _ml_readiness,
     _normalize_string_lists,
     _parse_llm_json,
@@ -262,7 +263,7 @@ def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) 
         # salvages cases where the LLM hits the cap mid-string.
         llm = get_llm(temperature=0.3, max_tokens=4096, model_id=model_id)
         prompt = BIZ_PROMPT.format(analysis=analysis_text)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = _invoke_with_retry(llm, [HumanMessage(content=prompt)])
         sections = _normalize_string_lists(_parse_llm_json(response.content))
         log.info("Biz narrative parsed: %d sections", len(sections))
         return sections
