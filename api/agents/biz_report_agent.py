@@ -12,6 +12,7 @@ Split from /eda so analysts and stakeholders each get a report tuned to them.
 """
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -33,49 +34,37 @@ from api.agents.document_agent import (
     _format_for_llm,
     _high_cardinality_cats,
     _ml_readiness,
-    _normalize_string_lists,
-    _parse_llm_json,
 )
-from api.llm import get_llm
+from api.llm import invoke_with_failover
 from api.logger import get_logger
 
 log = get_logger(__name__)
 
 
 BIZ_PROMPT = """\
-You are a senior business consultant (think McKinsey / BCG partner) briefing
-a CEO on what this dataset means for the business and what they should DO.
-Technical EDA lives in a separate /eda report — you do NOT need to repeat
-distributions, skewness, or modeling-readiness here. Focus on business value,
-strategy, and action.
+You are a senior business consultant briefing a CEO on what this dataset
+means for the business and what they should DO. Technical EDA lives in
+a separate /eda report — focus on business value, strategy, and action.
 
 ## Dataset Analysis
 {analysis}
 
 ## Instructions
-Write a JSON business report. Every claim must reference SPECIFIC numbers from
-the analysis — segment counts, percentages, value ranges, dominant categories.
-Generic advice is worthless; concrete strategy tied to this dataset is the goal.
+Write a JSON business report. Every claim must reference SPECIFIC numbers
+from the analysis — segment counts, percentages, value ranges, dominant
+categories. Concrete strategy tied to this dataset is the goal.
 
 IMPORTANT: Respond in the same language as the column names suggest.
-If columns look Thai (ราคา, ชื่อ, etc.) → write in Thai.
-If columns look English (price, name, etc.) → write in English.
-Mixed → write in the dominant language.
+Thai columns → Thai. English columns → English. Mixed → dominant language.
 
 Return EXACTLY this JSON (no markdown fences):
 {{
   "title": "Business Strategy Report: <dataset name>",
-  "executive_summary": "5-6 sentences: What this data represents in business terms. The 3 highest-leverage findings. The single #1 action item with expected impact. CEO-level only.",
-  "business_context": "4-5 sentences: What industry/domain does this data reflect? What part of the value chain? What business decisions does it inform? Cite columns that hint at the domain.",
-  "business_insights": "8-10 sentences: The KEY section. What does the data REVEAL about the business? Concentrations (Pareto-style), unusual segments, hidden risks, untapped opportunities. Each insight must cite real numbers (e.g. '17% of records carry 60% of the value'). Tell the story.",
+  "executive_summary": "4-5 sentences: What this data represents in business terms, the 2-3 highest-leverage findings, and the single #1 action item. CEO-level.",
+  "business_insights": "6-8 sentences: What does the data REVEAL about the business? Concentrations (Pareto-style), unusual segments, hidden risks, untapped opportunities, market structure. Each insight cites real numbers (e.g. '17% of records carry 60% of the value').",
   "key_segments": [
-    {{"name": "segment name", "size": "X records (Y%)", "characteristic": "what makes them distinct", "value_signal": "why they matter to the business"}},
+    {{"name": "segment name", "size": "X records (Y%)", "characteristic": "what makes them distinct", "value_signal": "why they matter"}},
     {{"name": "...", "size": "...", "characteristic": "...", "value_signal": "..."}}
-  ],
-  "market_analysis": "5-7 sentences: What does the data say about market structure? Price/value tiers, customer or product segments, demand patterns, competitive whitespace. Reference exact value ranges and counts.",
-  "use_cases": [
-    {{"title": "specific business use case", "description": "2-3 sentences: HOW the business uses this data — which columns drive the decision, expected outcome", "category": "marketing|sales|operations|product|finance|customer"}},
-    {{"title": "...", "description": "...", "category": "..."}}
   ],
   "opportunities": [
     "Opportunity 1 — specific revenue/cost lever with size estimate (cite the data)",
@@ -83,44 +72,29 @@ Return EXACTLY this JSON (no markdown fences):
     "Opportunity 3 — ..."
   ],
   "risks": [
-    "Risk 1 — business risk visible in the data (e.g. customer concentration, quality decline). Cite the metric.",
+    "Risk 1 — business risk visible in the data (cite the metric)",
     "Risk 2 — ...",
     "Risk 3 — ..."
-  ],
-  "promotion_strategies": [
-    "Strategy 1: Target the X records (Y% of inventory) that share Z — proposed action with expected lift",
-    "Strategy 2: ...",
-    "Strategy 3: ..."
   ],
   "recommendations": [
     "Quick Win (1-2 weeks): clear ROI action, owner = function",
     "Short-term (1-3 months): initiative with measurable outcome",
-    "Strategic (6-12 months): capability or infrastructure investment",
-    "Quick Win 2: ...",
-    "Short-term 2: ..."
-  ],
-  "suggested_kpis": [
-    "KPI 1 — metric definition + why it matters + baseline from this data if computable",
-    "KPI 2 — ...",
-    "KPI 3 — ..."
+    "Strategic (6-12 months): capability or infrastructure investment"
   ],
   "roadmap": {{
-    "next_30_days": "What to do in the first month — usually validation, pilot, or quick win",
-    "next_90_days": "What to do in the first quarter — usually deploy strategy or build capability",
-    "next_12_months": "What strategic shift this data enables"
+    "next_30_days": "First month — validation, pilot, or quick win",
+    "next_90_days": "First quarter — deploy strategy or build capability",
+    "next_12_months": "Strategic shift this data enables"
   }},
-  "conclusion": "3-4 sentences: Bottom line for the CEO. What is the strategic value of this data? What decision should be made this week?"
+  "conclusion": "2-3 sentences: Bottom line for the CEO. Strategic value + decision to make this week."
 }}
 
 Rules:
 - Cite REAL column names, segment sizes, percentages, value ranges
-- Every recommendation has a who, what, and rough timeline
-- key_segments: 3-5 segments tied to specific data slices
-- use_cases: 4-6 with category tags
+- key_segments: 3-4 segments tied to specific data slices
 - opportunities/risks: 3-5 each, concrete and quantified where possible
-- promotion_strategies: 3-5 with specific data references
 - NO technical jargon (skewness, multicollinearity, etc.) — /eda handles that
-- NO generic advice — every sentence must be derivable from the analysis above
+- NO generic advice — every sentence must be derivable from the analysis
 """
 
 
@@ -224,7 +198,7 @@ def run_biz_report(
     }
     charts = {k: v for k, v in charts.items() if v is not None}
 
-    analysis_text = _format_for_llm(analysis, column_profiles)
+    analysis_text = _format_for_llm(df, analysis, column_profiles)
     sections = _biz_narrative(analysis_text, dataset_name, model_id)
 
     # Reuse the same quality score calc — biz audiences benefit from knowing it too.
@@ -257,10 +231,19 @@ def run_biz_report(
 def _biz_narrative(analysis_text: str, dataset_name: str, model_id: str | None) -> dict:
     """LLM narrator for the business report. Falls back to a stub on failure."""
     try:
-        llm = get_llm(temperature=0.3, max_tokens=8192, model_id=model_id)
         prompt = BIZ_PROMPT.format(analysis=analysis_text)
-        response = llm.invoke([HumanMessage(content=prompt)])
-        sections = _normalize_string_lists(_parse_llm_json(response.content))
+        response = invoke_with_failover(
+            [HumanMessage(content=prompt)],
+            model_id=model_id,
+            temperature=0.3,
+            max_tokens=8192,
+        )
+        raw = response.content.strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        sections = json.loads(raw)
         log.info("Biz narrative parsed: %d sections", len(sections))
         return sections
     except Exception as exc:

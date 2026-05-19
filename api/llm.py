@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from functools import lru_cache
 from typing import Union
 
@@ -20,6 +21,17 @@ ANTHROPIC_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
 # project default (Claude Haiku 4.5) — fastest model in the picker with strong
 # instruction following and ANTHROPIC_API_KEY is always provisioned on Render.
 FALLBACK_MODEL_ID = "claude-haiku-4-5"
+
+# Cross-provider failover chain for long-running narrators (/eda, /biz-report).
+# When the primary model returns a transient error (Anthropic 529 overloaded,
+# 503, timeout, network reset), we walk this chain until one succeeds. Mixing
+# providers means a single-provider outage doesn't take the agent down.
+MODEL_FAILOVER_CHAIN = [
+    "claude-haiku-4-5",   # fastest Anthropic, lowest cost
+    "gpt-5.4-nano",       # fastest OpenAI, cross-provider safety
+    "claude-sonnet-4-6",  # same provider but bigger / more headroom
+    "gpt-5-mini",         # final cross-provider attempt
+]
 
 # Models where the `temperature` parameter has been deprecated by the provider.
 # Sending it returns 400 invalid_request_error. Newer reasoning-style models
@@ -52,25 +64,22 @@ def _make_llm(
         return ChatAnthropic(**kwargs)
 
 
-def get_llm(
-    temperature: float = 0.0,
-    max_tokens: int = 1024,
-    model_id: str | None = None,
+def _get_raw_llm(
+    temperature: float,
+    max_tokens: int,
+    model_id: str | None,
 ) -> Union["ChatOpenAI", "ChatAnthropic"]:  # type: ignore[name-defined]
-    """
-    Return a cached LLM instance. Auto-detects provider from model_id.
-    Falls back to env var defaults if model_id is not provided. If the
-    requested model is unknown (older picker entry persisted in DB,
-    front-end build mismatch), logs a warning and silently downgrades
-    to FALLBACK_MODEL_ID instead of raising — keeps Render deployments
-    resilient to stale client state.
+    """Return the underlying cached ChatAnthropic / ChatOpenAI instance.
+
+    Used internally by invoke_with_failover. Most callers should use get_llm()
+    instead, which wraps this in a _FailoverLLM that retries cross-provider
+    when the primary model errors out.
     """
     requested = model_id or get_default_model_id()
     active_model = requested
     if active_model not in OPENAI_MODELS and active_model not in ANTHROPIC_MODELS:
         log.warning(
-            "Unknown model_id '%s' — falling back to '%s'. "
-            "Supported: %s",
+            "Unknown model_id '%s' — falling back to '%s'. Supported: %s",
             active_model, FALLBACK_MODEL_ID, OPENAI_MODELS | ANTHROPIC_MODELS,
         )
         active_model = FALLBACK_MODEL_ID
@@ -91,6 +100,48 @@ def get_llm(
     )
 
 
+class _FailoverLLM:
+    """Drop-in stand-in for a langchain ChatModel whose .invoke() walks the
+    MODEL_FAILOVER_CHAIN on transient errors (Anthropic 529 overloaded,
+    OpenAI 503, timeouts, network drops). Every existing call site that
+    does `llm = get_llm(...); llm.invoke(x)` automatically gains
+    cross-provider failover with no per-site refactor.
+
+    Only .invoke() is implemented — callers that need .stream(), .batch(),
+    or other Runnable methods should fetch the raw model via _get_raw_llm().
+    """
+    __slots__ = ("model_id", "temperature", "max_tokens")
+
+    def __init__(self, model_id: str | None, temperature: float, max_tokens: int):
+        self.model_id = model_id
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def invoke(self, input):  # noqa: A002 — matches langchain Runnable signature
+        return invoke_with_failover(
+            input,
+            model_id=self.model_id,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+
+
+def get_llm(
+    temperature: float = 0.0,
+    max_tokens: int = 1024,
+    model_id: str | None = None,
+) -> _FailoverLLM:
+    """Return a failover-aware LLM wrapper.
+
+    Behaves like a langchain ChatModel for .invoke() callers but transparently
+    retries against MODEL_FAILOVER_CHAIN if the primary errors out (provider
+    overload, rate-limit, transient network). Construction is cheap — the
+    actual ChatAnthropic / ChatOpenAI instances are still cached inside
+    _make_llm() by (provider, key, model, temp, max_tokens).
+    """
+    return _FailoverLLM(model_id, temperature, max_tokens)
+
+
 def get_default_model_id() -> str:
     """Returns the default model ID from environment.
 
@@ -100,6 +151,49 @@ def get_default_model_id() -> str:
     following.
     """
     return os.environ.get("OPENAI_MODEL", "claude-haiku-4-5")
+
+
+def invoke_with_failover(
+    messages: list,
+    model_id: str | None = None,
+    temperature: float = 0.0,
+    max_tokens: int = 4096,
+    max_attempts: int = 4,
+    base_delay: float = 1.2,
+):
+    """Invoke an LLM, failing over to other models on transient errors.
+
+    Walks MODEL_FAILOVER_CHAIN until one model succeeds or all are exhausted.
+    The user-selected primary is tried first; deduplicated, the chain visits
+    a cross-provider candidate next so a single provider outage doesn't kill
+    the request. Small exponential backoff between attempts.
+
+    Returns the LangChain response object. Raises the last exception if all
+    chain members fail.
+    """
+    primary = model_id or get_default_model_id()
+    chain = [primary] + [m for m in MODEL_FAILOVER_CHAIN if m != primary]
+    chain = chain[:max_attempts]
+    last_exc: Exception | None = None
+    for i, mid in enumerate(chain):
+        try:
+            llm = _get_raw_llm(temperature=temperature, max_tokens=max_tokens, model_id=mid)
+            result = llm.invoke(messages)
+            if i > 0:
+                log.info("LLM failover succeeded on '%s' after %d failed attempts", mid, i)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            if i < len(chain) - 1:
+                delay = base_delay * (1.5 ** i)
+                log.warning(
+                    "LLM '%s' failed (%s) — failing over to '%s' in %.1fs",
+                    mid, exc, chain[i + 1], delay,
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    log.warning("All %d models in failover chain failed; last: %s", len(chain), last_exc)
+    raise last_exc
 
 
 def build_lc_history(
