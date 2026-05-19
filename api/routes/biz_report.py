@@ -29,7 +29,7 @@ class BizReportResponse(BaseModel):
 
 
 @router.post("/biz-report", response_model=BizReportResponse)
-async def biz_report(req: BizReportRequest) -> BizReportResponse:
+def biz_report(req: BizReportRequest) -> BizReportResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /biz-report  model=%s  dataset='%s'  rows=%d",
              model_id, req.dataset_name, len(req.data))

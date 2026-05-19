@@ -52,7 +52,7 @@ async def feature_pipeline_meta(pipeline_id: str) -> FeaturePipelineMeta | None:
 
 
 @router.post("/feature/analyze", response_model=FeatureAnalyzeResponse)
-async def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
+def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /feature/analyze  model=%s  dataset='%s' rows=%d",
              model_id, req.dataset_name, len(req.data))
@@ -73,7 +73,7 @@ async def feature_analyze(req: FeatureAnalyzeRequest) -> FeatureAnalyzeResponse:
 
 
 @router.post("/feature", response_model=FeatureResponse)
-async def feature(req: FeatureRequest) -> FeatureResponse:
+def feature(req: FeatureRequest) -> FeatureResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(
         ">>> /feature  model=%s  dataset='%s' rows=%d task=%s target=%s split=%s",

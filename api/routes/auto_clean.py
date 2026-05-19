@@ -30,7 +30,7 @@ class AutoCleanResponse(BaseModel):
 
 
 @router.post("/auto-clean", response_model=AutoCleanResponse)
-async def auto_clean(req: AutoCleanRequest) -> AutoCleanResponse:
+def auto_clean(req: AutoCleanRequest) -> AutoCleanResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /auto-clean  model=%s  dataset='%s'  rows=%d",
              model_id, req.dataset_name, len(req.data))

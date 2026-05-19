@@ -29,7 +29,7 @@ class EDADocumentResponse(BaseModel):
 
 
 @router.post("/eda", response_model=EDADocumentResponse)
-async def eda(req: EDADocumentRequest) -> EDADocumentResponse:
+def eda(req: EDADocumentRequest) -> EDADocumentResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /eda  model=%s  dataset='%s'  rows=%d",
              model_id, req.dataset_name, len(req.data))

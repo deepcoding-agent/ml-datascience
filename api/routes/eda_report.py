@@ -164,7 +164,7 @@ def _generate_charts(df: pd.DataFrame) -> list[str]:
 
 
 @router.post("/eda-report", response_model=EDAResponse)
-async def eda_report(req: EDARequest) -> EDAResponse:
+def eda_report(req: EDARequest) -> EDAResponse:
     t0 = time.perf_counter()
     log.info("▶ /eda-report  dataset='%s'  rows=%d", req.dataset.name, len(req.dataset.data))
 

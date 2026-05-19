@@ -40,7 +40,7 @@ log = get_logger(__name__)
 # ── POST /train/analyze — AI-suggested training setup ──────────────────────
 
 @router.post("/train/analyze", response_model=TrainAnalyzeResponse)
-async def train_analyze(req: TrainAnalyzeRequest) -> TrainAnalyzeResponse:
+def train_analyze(req: TrainAnalyzeRequest) -> TrainAnalyzeResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /train/analyze  model=%s  dataset='%s' rows=%d",
              model_id, req.dataset_name, len(req.data))
@@ -110,7 +110,7 @@ class TrainResponse(BaseModel):
 
 @router.post("/train", response_model=TrainResponse)
 @limiter.limit("6/minute")
-async def train(request: Request, req: TrainRequest) -> TrainResponse:
+def train(request: Request, req: TrainRequest) -> TrainResponse:
     model_id = req.model_id or get_default_model_id()
     log.info(">>> /train  model=%s  rows=%d  cols=%d  target=%s  task=%s",
              model_id, len(req.rows), len(req.columns), req.target_column, req.task_type)

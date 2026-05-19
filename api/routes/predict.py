@@ -38,7 +38,7 @@ class PredictResponse(BaseModel):
 
 
 @router.post("/predict", response_model=PredictResponse)
-async def predict(req: PredictRequest) -> PredictResponse:
+def predict(req: PredictRequest) -> PredictResponse:
     log.info(">>> /predict  model=%s  rows=%d  apply_pipeline=%s",
              req.model_id, len(req.rows), req.apply_feature_pipeline)
     try:
