@@ -64,25 +64,22 @@ def _make_llm(
         return ChatAnthropic(**kwargs)
 
 
-def get_llm(
-    temperature: float = 0.0,
-    max_tokens: int = 1024,
-    model_id: str | None = None,
+def _get_raw_llm(
+    temperature: float,
+    max_tokens: int,
+    model_id: str | None,
 ) -> Union["ChatOpenAI", "ChatAnthropic"]:  # type: ignore[name-defined]
-    """
-    Return a cached LLM instance. Auto-detects provider from model_id.
-    Falls back to env var defaults if model_id is not provided. If the
-    requested model is unknown (older picker entry persisted in DB,
-    front-end build mismatch), logs a warning and silently downgrades
-    to FALLBACK_MODEL_ID instead of raising — keeps Render deployments
-    resilient to stale client state.
+    """Return the underlying cached ChatAnthropic / ChatOpenAI instance.
+
+    Used internally by invoke_with_failover. Most callers should use get_llm()
+    instead, which wraps this in a _FailoverLLM that retries cross-provider
+    when the primary model errors out.
     """
     requested = model_id or get_default_model_id()
     active_model = requested
     if active_model not in OPENAI_MODELS and active_model not in ANTHROPIC_MODELS:
         log.warning(
-            "Unknown model_id '%s' — falling back to '%s'. "
-            "Supported: %s",
+            "Unknown model_id '%s' — falling back to '%s'. Supported: %s",
             active_model, FALLBACK_MODEL_ID, OPENAI_MODELS | ANTHROPIC_MODELS,
         )
         active_model = FALLBACK_MODEL_ID
@@ -101,6 +98,48 @@ def get_llm(
         f"Fallback model '{FALLBACK_MODEL_ID}' is itself not in any whitelist — "
         "check OPENAI_MODELS / ANTHROPIC_MODELS in api/llm.py."
     )
+
+
+class _FailoverLLM:
+    """Drop-in stand-in for a langchain ChatModel whose .invoke() walks the
+    MODEL_FAILOVER_CHAIN on transient errors (Anthropic 529 overloaded,
+    OpenAI 503, timeouts, network drops). Every existing call site that
+    does `llm = get_llm(...); llm.invoke(x)` automatically gains
+    cross-provider failover with no per-site refactor.
+
+    Only .invoke() is implemented — callers that need .stream(), .batch(),
+    or other Runnable methods should fetch the raw model via _get_raw_llm().
+    """
+    __slots__ = ("model_id", "temperature", "max_tokens")
+
+    def __init__(self, model_id: str | None, temperature: float, max_tokens: int):
+        self.model_id = model_id
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def invoke(self, input):  # noqa: A002 — matches langchain Runnable signature
+        return invoke_with_failover(
+            input,
+            model_id=self.model_id,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+
+
+def get_llm(
+    temperature: float = 0.0,
+    max_tokens: int = 1024,
+    model_id: str | None = None,
+) -> _FailoverLLM:
+    """Return a failover-aware LLM wrapper.
+
+    Behaves like a langchain ChatModel for .invoke() callers but transparently
+    retries against MODEL_FAILOVER_CHAIN if the primary errors out (provider
+    overload, rate-limit, transient network). Construction is cheap — the
+    actual ChatAnthropic / ChatOpenAI instances are still cached inside
+    _make_llm() by (provider, key, model, temp, max_tokens).
+    """
+    return _FailoverLLM(model_id, temperature, max_tokens)
 
 
 def get_default_model_id() -> str:
@@ -138,7 +177,7 @@ def invoke_with_failover(
     last_exc: Exception | None = None
     for i, mid in enumerate(chain):
         try:
-            llm = get_llm(temperature=temperature, max_tokens=max_tokens, model_id=mid)
+            llm = _get_raw_llm(temperature=temperature, max_tokens=max_tokens, model_id=mid)
             result = llm.invoke(messages)
             if i > 0:
                 log.info("LLM failover succeeded on '%s' after %d failed attempts", mid, i)
